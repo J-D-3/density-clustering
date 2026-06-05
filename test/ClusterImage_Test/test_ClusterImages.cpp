@@ -1,89 +1,89 @@
 // Copyright Ingo Proff 2016.
-// https://github.com/CrikeeIP/OPTICS-Clustering
+// https://github.com/J-D-3/OPTICS-Clustering
 // Distributed under the MIT Software License (X11 license).
 // (See accompanying file LICENSE)
 
-#include "../../include/optics/optics.hpp"
-#include "../../include/optics/bgr_image.hpp"
+// Visual / inspection test: cluster synthetic (and optionally hand-drawn) point
+// clouds, assert structure, and export CSVs for tools/visualize.py to render.
 
+#include <optics/optics.hpp>
+#include <optics/io.hpp>
+#include <optics/testdata.hpp>
+
+#include "../support/ppm_fixture.hpp"
+
+#include <array>
+#include <cassert>
+#include <cstddef>
+#include <iostream>
+#include <string>
 #include <vector>
 
 
+namespace {
 
-
-inline std::vector<std::array<int, 2>> load_points_from_image( const std::string& file_path )
-{
-	const bgr_image img = imread( file_path );
-	assert( img.size().area() != 0 );
-	std::vector<std::array<int, 2>> result;
-	for ( std::size_t y = 0; y < img.size().height_; ++y )
-	{
-		for ( std::size_t x = 0; x < img.size().width_; ++x )
-		{
-			if ( img.pix( img_pos(x, y) ) != bgr_col(255,255,255) )
-			{
-				result.push_back( { static_cast<int>(x), static_cast<int>(y) } );
-			}
-		}
+// Number of clusters with at least min_size members (ignores singleton noise).
+std::size_t count_large_clusters( const std::vector<std::vector<std::size_t>>& clusters, std::size_t min_size ) {
+	std::size_t n = 0;
+	for ( const auto& c : clusters ) {
+		if ( c.size() >= min_size ) { ++n; }
 	}
-	return result;
+	return n;
 }
 
+// Cluster a cloud and export points+labels and the reachability plot as CSV.
+template <typename T, std::size_t Dim>
+std::vector<std::vector<std::size_t>> cluster_and_export(
+	const std::vector<std::array<T, Dim>>& points, std::size_t min_pts, double threshold,
+	const std::string& tag ) {
+	const auto reach_dists = optics::compute_reachability_dists( points, min_pts );
+	const auto clusters = optics::get_cluster_indices( reach_dists, threshold );
+	const auto labels = optics::io::cluster_labels( points.size(), clusters, /*min_cluster_size=*/min_pts );
 
-int main__()
-{
-	std::string path = "./test/ClusterImage_Test/ClusterImage_1.ppm";
-	const auto points = load_points_from_image( path );
-	std::cout << "Extracted " << points.size() << " points from the image" << std::endl;
+	optics::io::export_points_csv( tag + "_points.csv", points, labels );
+	optics::io::export_reachability_csv( tag + "_reachability.csv", reach_dists );
+	std::cout << "  wrote " << tag << "_points.csv and " << tag << "_reachability.csv ("
+			  << points.size() << " points)" << std::endl;
+	return clusters;
+}
 
-	std::size_t min_pts = 15;
-	auto eps = 2 * optics::epsilon_estimation( points, min_pts );
-	std::cout << "Estimated epsilon = " << eps << std::endl;
+}  // namespace
 
-	std::cout << "Computing Reachability-Distances..." << std::endl;
-	const auto reach_dists = optics::compute_reachability_dists<1000>( points, min_pts, eps );
-	std::cout << "Done!" << std::endl;
 
-	//std::string str = fplus::show(reach_dists);
-	//std::cout << "Written: " << fplus::write_text_file("ReachDists_Text.txt", str)() << std::endl;
-
-	/*for ( std::size_t l = 0; l < 1000; l++ ) {
-		auto reach_dists_ = optics::compute_reachability_dists( points, min_pts, eps );
-		if ( l % 10 == 0 ) std::cout << l << std::endl;
-	}*/
-
-	std::cout << "Drawing reachability-plot" << std::endl;
-	auto reach_img = optics::draw_reachability_plot( reach_dists );
-	reach_img.save( "./ReachDists" );
-
-   std::cout << "Drawing 2D-Clusters" << std::endl;
+int main( int argc, char** argv ) {
+	// --- Well-separated 2D blobs: structural assertion ---------------------
 	{
-		auto clusters = optics::get_cluster_points( reach_dists, 10, points );
-		auto img = optics::draw_2d_clusters( clusters );
-		img.save( "./ClusterImg_10" );
-	}
-	{
-		auto clusters = optics::get_cluster_points( reach_dists, 20, points );
-		auto img = optics::draw_2d_clusters( clusters );
-		img.save( "./ClusterImg_20" );
+		const std::vector<std::array<double, 2>> centers = { { 0, 0 }, { 60, 0 }, { 30, 50 } };
+		const auto points = optics::testdata::gaussian_blobs<double, 2>( centers, /*per_blob=*/200, /*stddev=*/1.5 );
+		const auto clusters = cluster_and_export( points, /*min_pts=*/10, /*threshold=*/10.0, "blobs2d" );
+		assert( count_large_clusters( clusters, /*min_size=*/50 ) == 3 );
 	}
 
-   std::cout << "Computing Chi-Clusters" << std::endl;
+	// --- 3D blobs (e.g. a color space): export for 3D visualization --------
 	{
-		//Chi Clusters
-		double chi = 0.02;
-		double steep_area_min_diff = 0.25;
-
-		auto chi_img = optics::draw_reachability_plot_with_chi_clusters( reach_dists, chi, min_pts, steep_area_min_diff );
-		chi_img.save( "./Reachdists_ChiCluster" );
-
-		auto chi_clusters = optics::get_chi_clusters( reach_dists, chi, min_pts, steep_area_min_diff );
-		std::vector<optics::chi_cluster_indices> chi_clusters_flat;
-		chi_clusters_flat = fplus::concat( fplus::transform( optics::flatten_dfs<optics::chi_cluster_indices>, chi_clusters ) );
-		auto cluster_pts = optics::get_cluster_points( reach_dists, chi_clusters_flat, points );
-		auto chi_cluster_img = optics::draw_2d_clusters( cluster_pts );
-		chi_cluster_img.save( "./ChiClusterImg" );
+		const std::vector<std::array<double, 3>> centers = {
+			{ 0, 0, 0 }, { 60, 0, 0 }, { 0, 60, 0 }, { 0, 0, 60 } };
+		const auto points = optics::testdata::gaussian_blobs<double, 3>( centers, /*per_blob=*/300, /*stddev=*/3.0 );
+		const auto clusters = cluster_and_export( points, /*min_pts=*/12, /*threshold=*/15.0, "blobs3d" );
+		assert( count_large_clusters( clusters, /*min_size=*/50 ) == 4 );
 	}
 
+	// --- Optional hand-drawn 2D fixture (white = empty, non-white = point) --
+	if ( argc > 1 ) {
+		const auto points = optics::fixture::read_ppm_points( argv[1] );
+		std::cout << "  loaded " << points.size() << " points from " << argv[1] << std::endl;
+		if ( !points.empty() ) {
+			const std::size_t min_pts = 15;
+			const double eps = 2.0 * optics::epsilon_estimation( points, min_pts );
+			const auto reach_dists = optics::compute_reachability_dists( points, min_pts, eps );
+			const auto clusters = optics::get_cluster_indices( reach_dists, eps );
+			const auto labels = optics::io::cluster_labels( points.size(), clusters, min_pts );
+			optics::io::export_points_csv( "fixture_points.csv", points, labels );
+			optics::io::export_reachability_csv( "fixture_reachability.csv", reach_dists );
+			std::cout << "  wrote fixture_points.csv and fixture_reachability.csv" << std::endl;
+		}
+	}
+
+	std::cout << "Visual/export tests successful!" << std::endl;
 	return 0;
 }

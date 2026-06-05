@@ -1,10 +1,14 @@
 // Copyright Ingo Proff 2016.
-// https://github.com/CrikeeIP/OPTICS-Clustering
+// https://github.com/J-D-3/OPTICS-Clustering
 // Distributed under the MIT Software License (X11 license).
 // (See accompanying file LICENSE)
 
 
 #pragma once
+
+#include <algorithm>
+#include <cstddef>
+#include <vector>
 
 namespace optics {
 
@@ -81,15 +85,20 @@ private:
 
 template<typename T>
 std::size_t tree_depth( const Node<T>& root ) {
-	auto child_depths = fplus::transform( tree_depth<T>, root.get_children() );
-	return 1 + (child_depths.empty() ? 0 : fplus::maximum( child_depths ));
-
+	std::size_t max_child_depth = 0;
+	for ( const auto& c : root.get_children() ) {
+		max_child_depth = std::max( max_child_depth, tree_depth<T>( c ) );
+	}
+	return 1 + max_child_depth;
 }
 
 template<typename T>
 std::size_t tree_size( const Node<T>& root ) {
-	auto child_sizes = fplus::transform( tree_size<T>, root.get_children() );
-	return 1 + fplus::sum( child_sizes );
+	std::size_t total = 0;
+	for ( const auto& c : root.get_children() ) {
+		total += tree_size<T>( c );
+	}
+	return 1 + total;
 }
 
 namespace internal{

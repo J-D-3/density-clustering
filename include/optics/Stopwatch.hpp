@@ -1,5 +1,5 @@
 // Copyright Ingo Proff 2017.
-// https://github.com/CrikeeIP/Stopwatch
+// https://github.com/J-D-3/Stopwatch
 // Distributed under the MIT Software License (X11 license).
 // (See accompanying file LICENSE)
 
@@ -7,6 +7,7 @@
 
 #include <vector>
 #include <chrono>
+#include <string>
 
 
 namespace stopwatch{
