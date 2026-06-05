@@ -1,68 +1,80 @@
-[![Build Status](https://travis-ci.org/CrikeeIP/OPTICS-Clustering.svg?branch=master)][travis]
+[![CI](https://github.com/CrikeeIP/OPTICS-Clustering/actions/workflows/ci.yml/badge.svg)](https://github.com/CrikeeIP/OPTICS-Clustering/actions/workflows/ci.yml)
 
-[travis]: https://travis-ci.org/CrikeeIP/OPTICS-Clustering
+# OPTICS-Clustering
 
-# OPTICS-Clustering (UNDER CONSTRUCTION)
-
-**Ordering points to identify the clustering structure ([OPTICS](https://github.com/CrikeeIP/OPTICS-Clustering/blob/master/background/OPTICS.pdf))** is an algorithm for finding density-based clusters in spatial data. It was presented by Mihael Ankerst, Markus M. Breunig, Hans-Peter Kriegel and Jörg Sander in 1999.
+**Ordering Points To Identify the Clustering Structure ([OPTICS](https://github.com/CrikeeIP/OPTICS-Clustering/blob/master/background/OPTICS.pdf))** is an algorithm for finding density-based clusters in spatial data, presented by Mihael Ankerst, Markus M. Breunig, Hans-Peter Kriegel and Jörg Sander in 1999.
 
 ## Introduction
-This repository is home to a C++ implementation of the OPTICS algorithm as described by Ankerst et al.. It aims at providing an easy-to-use clustering algorithm which does not require knowledge of the number of clusters a priori.  
-For further explanation on how the algorithm works, see e.g. [Wikipedia](https://en.wikipedia.org/wiki/OPTICS_algorithm) or [YouTube](https://www.youtube.com/watch?v=8kJjgowewOs).  
-The implementation relies on the `boost::rtree` to efficiently retrieve the neighbourhood of a given point.
 
+This repository is a header-only **C++20** implementation of OPTICS. It provides an easy-to-use clustering algorithm that does not require knowing the number of clusters a priori, and that scales to large point clouds (millions of points). You can inspect the cluster structure visually (via a [reachability plot](https://github.com/CrikeeIP/OPTICS-Clustering/blob/master/resources/reachabilityplot.png)) and extract clusters either with a simple reachability threshold or with the hierarchical ξ (Xi) method.
+
+For background on the algorithm see the [paper](https://github.com/CrikeeIP/OPTICS-Clustering/blob/master/background/OPTICS.pdf), [Wikipedia](https://en.wikipedia.org/wiki/OPTICS_algorithm), or [YouTube](https://www.youtube.com/watch?v=8kJjgowewOs).
 
 ## Usage
-Suppose you have a set of points in R^n, described in Cartesian coordinates, and wonder if they have a cluster structure.
-Then you might consider using this library, as it offers an interface that lets you visually inspect the cluster structure of the data space (using a [reachability-plot](https://github.com/CrikeeIP/OPTICS-Clustering/blob/master/resources/reachabilityplot.png)) - *and* extract those clusters with three lines of code:
+
+A point is a `std::array<T, Dim>` of Cartesian coordinates (`T` is `float` or `double`); a cloud is a `std::vector` of those.
 
 ```cpp
-#include <optics/optics.h>
+#include <optics/optics.hpp>
+#include <array>
+#include <vector>
 
-typedef std::vector<double> point; //A list of n cartesian coordinates makes a point
-std::vector<point> points; //Your list of points goes here
+using Point = std::array<double, 2>;
 
-int main(){
-   auto reach_dists = optics::compute_reachability_dists<T,N>( points, min_pts, epsilon );
-   optics::draw_reachability_plot( reach_dists, "./reachdists.bmp" );
-   auto clusters = optics::get_cluster_indices( reach_dists, threshold );
+int main() {
+    std::vector<Point> points = /* your data */;
+
+    // The OPTICS cluster-ordering + reachability distances.
+    auto reach = optics::compute_reachability_dists(points, /*min_pts=*/10);
+
+    // Flat clusters by a reachability threshold ...
+    auto clusters = optics::get_cluster_indices(reach, /*threshold=*/2.0);
+
+    // ... or the hierarchical Xi method (nested cluster trees).
+    auto trees = optics::get_chi_clusters(reach, /*chi=*/0.05, /*min_pts=*/10);
 }
 ```
 
+The full signature lets you choose the backend, neighbor-acquisition strategy, and thread count:
+
+```cpp
+optics::compute_reachability_dists<T, Dim, Backend>(
+    points, min_pts,
+    epsilon  = -1.0,                        // auto-estimated when <= 0
+    mode     = optics::NeighborMode::Precompute,  // or OnDemand (lean memory)
+    n_threads = 0);                         // 0 => hardware concurrency
+```
+
+### Visualizing results
+
+The core writes no images; export CSV and render with the bundled script (matplotlib):
+
+```cpp
+#include <optics/io.hpp>
+auto labels = optics::io::cluster_labels(points.size(), clusters);
+optics::io::export_points_csv("points.csv", points, labels);   // any dimension
+optics::io::export_reachability_csv("reach.csv", reach);
+```
+
+```sh
+python tools/visualize.py --points points.csv --reach reach.csv --out plot.png
+```
+
+`visualize.py` handles 2D and 3D scatter (e.g. color spaces) and falls back to a PCA projection for higher dimensions.
 
 ## Dependencies
-Two lightweight header-only libraries, and boost (`::geometry` and `::index`, to be exact) 
-1. [Geometry](https://github.com/CrikeeIP/Geometry)  
-2. [FunctionalPlus](https://github.com/Dobiasd/FunctionalPlus)  
-3. [Boost](http://www.boost.org/)
 
+None required: [nanoflann](https://github.com/jlblancoc/nanoflann) is vendored under `include/optics/`, and everything else is the C++ standard library. **Boost** is an optional alternative neighbor-search backend, enabled with `-DOPTICS_ENABLE_BOOST_RTREE=ON`.
 
-## Installation
-Before the installation, make sure you have installed [Boost](http://www.boost.org/).
-Subsequently, you can use one of the following two alternative ways to install OPTICS-Clustering:
+## Building & testing
 
-***Alternative 1:***  
-Clone this repository
+Header-only — just add `include/` to your include path and `#include <optics/optics.hpp>`. To build the tests/benchmark (CMake ≥ 3.21, MSVC 2022 / GCC 10+ / Clang 13+):
+
 ```sh
-git clone https://github.com/CrikeeIP/OPTICS-Clustering
+cmake --preset linux-gcc      # or: linux-clang, msvc
+cmake --build --preset linux-gcc
+ctest --preset linux-gcc
 ```
-and execute the the `install.sh` script delivered with it.
-
-***Alternative 2:***  
-If you're uncomfortable running who-knows-what-they'll-do foreign scripts (and are too tired to check them before execution), you can also do it manually:
-1. Clone & include the [Geometry](https://github.com/CrikeeIP/Geometry) header-lib,
-2. Clone & install [FunctionalPlus](https://github.com/Dobiasd/FunctionalPlus) 
-3. Clone & install the OPTICS repository:
-```sh
-git clone https://github.com/CrikeeIP/OPTICS-Clustering
-cd OPTICS-clustering
-./configure && make && make install
-```
-
-## Disclaimer
-
-This librarys functionality initially grew due to my personal need for it - an easy to use clustering algorithm which does not need to know the number of clusters a priori.
-I try my best to make it error free and as comfortable to use as I can. The API still might change in the future. If you have any suggestions, find errors, miss some functions or want to give general feedback/criticism, I'd love to hear from you. Of course, [contributions](https://github.com/CrikeeIP/OPTICS-Clustering/pulls) are also very welcome.
 
 ## License
 
