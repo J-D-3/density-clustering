@@ -28,7 +28,8 @@ ctest --test-dir build -C Release --output-on-failure
 - **Run one suite:** `ctest --preset msvc -R optics_tests` (suites: `optics_tests`, `optics_visual_test`), or run the built exe directly (`build/test/Release/optics_tests.exe`). Use `ctest --output-on-failure` to see doctest's per-case report.
 - **Unit suite uses [doctest](https://github.com/doctest/doctest)** (`test/third_party/doctest.h`, vendored, test-only): `optics_tests` is `TEST_CASE`/`CHECK`-based, so assertions run regardless of `NDEBUG`. Note: doctest can't decompose `&&`/`||` in a `CHECK` — wrap such expressions in parens. The separate `optics_visual_test` still verifies via `assert()`, so it keeps `/UNDEBUG` (MSVC) / `-UNDEBUG` (GCC/Clang).
 - **Optional Boost backend:** configure with `-DOPTICS_ENABLE_BOOST_RTREE=ON` (needs Boost.Geometry). This compiles `BoostRTreeBackend` and an `#ifdef`-gated equivalence test. Boost is exercised in CI (`.github/workflows/ci.yml`), not in the default build.
-- **Benchmark:** build the `optics_benchmark` target (Release) and run it; an optional integer arg scales the point counts (`optics_benchmark 4`). Not a ctest.
+- **Benchmarks (Release, none are ctests):** `optics_benchmark` — general benchmark; optional integer arg scales the point counts (`optics_benchmark 4`). `optics_perf` — nanobench perf-regression harness, emits `optics_perf.csv`. `optics_scale` — large-scale (1e6–1e7) 3-D timing harness.
+- **Examples:** built when `OPTICS_BUILD_EXAMPLES` is ON (default for a top-level build). `optics_color` (`examples/color_clustering/`) clusters a 3-D RGB color space; see that dir's `README.md` and the companion Python scripts. Toggle build scope with `OPTICS_BUILD_TESTS` / `OPTICS_BUILD_EXAMPLES`; `OPTICS_INSTALL` adds install + `find_package(optics)` / FetchContent config.
 - **Local toolchain note:** on the original dev machine only VS2022 is installed (no g++/standalone cmake on PATH); use its bundled cmake at `…\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe`.
 
 ## Architecture & data flow
@@ -39,6 +40,7 @@ The pipeline lives under `include/optics/`. Public entry point is `optics.hpp`.
 2. **Extraction:**
    - Threshold cut: `get_cluster_indices(reach_dists, threshold)` → flat clusters (noise → singletons; a deliberate simplification of the paper's ExtractDBSCAN, which also used core-distance).
    - Xi / steep-area: `get_chi_clusters_flat(...)` → flat `(begin,end)` ranges; `get_chi_clusters(...)` builds the nested `cluster_tree` (`tree.hpp`). This is paper Defs 9–11 / Fig. 19 and the most subtle code; its behavior is pinned by the `chi_test_*` cases.
+   - One-call convenience wrappers: `cluster_dbscan(points, min_pts, threshold)` (compute + threshold cut), `extract_xi(reach_dists, chi, min_pts)` (Xi clusters as point-index lists), and `convert_cloud<Out>(in)` to lift an integer/byte cloud (e.g. `uint8` color data) to `float`/`double` before clustering.
 3. **Inspection (optional, no rendering in C++):** `io.hpp` exports dimension-agnostic CSV (`export_points_csv` with `cluster_labels`, `export_reachability_csv`); `tools/visualize.py` renders 2D/3D/PCA scatter + reachability plots with matplotlib.
 
 ### Neighbor-search backend seam
