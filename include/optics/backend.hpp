@@ -6,7 +6,9 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 #include "nanoflann.hpp"
@@ -20,6 +22,16 @@ namespace optics {
 //                sequential. Prefer for very large clouds (e.g. 1e7 points).
 enum class NeighborMode { Precompute, OnDemand };
 
+// How a point's core-distance is computed during the ordering pass.
+//   Scan : nth_element over the point's full epsilon-neighborhood (default;
+//          exact, and cheap when neighborhoods are small).
+//   Knn  : a k-NN query for the min_pts-th nearest neighbor, avoiding a scan of
+//          huge neighborhoods -- a large win on dense clouds (e.g. flat-color
+//          images, issue #24). Yields identical core-distances (hence identical
+//          orderings) to Scan. Requires the backend to model KnnCoreDist; for
+//          backends without that capability the ordering loop falls back to Scan.
+enum class CoreDistMode { Scan, Knn };
+
 // A neighbor-search backend ingests the point cloud once at construction (it may
 // convert to a native layout there) and answers radius queries without any
 // per-query reformatting of the query point. Backends satisfy this concept.
@@ -27,6 +39,14 @@ template <class B, class T, std::size_t Dim>
 concept NeighborSearch = requires(const B b, const std::array<T, Dim>& p, T r,
                                   std::vector<std::size_t>& out) {
     b.radius_search(p, r, out);
+};
+
+// Optional capability: a backend that can answer the core-distance directly via a
+// k-NN query (distance to the min_pts-th nearest point, or nullopt if it lies
+// beyond r). Enables CoreDistMode::Knn; detected with `if constexpr`.
+template <class B, class T, std::size_t Dim>
+concept KnnCoreDist = requires(const B b, const std::array<T, Dim>& p, std::size_t k, T r) {
+    b.knn_core_dist(p, k, r);
 };
 
 namespace detail {
@@ -71,6 +91,23 @@ public:
         index_.radiusSearch(p.data(), radius_sq, matches, params);
         out.reserve(out.size() + matches.size());
         for (const auto& m : matches) out.push_back(m.first);
+    }
+
+    // Core-distance via a k-NN query: distance to the min_pts-th nearest point,
+    // or nullopt if that neighbor lies beyond r (equivalently, fewer than min_pts
+    // points lie within r -- the UNDEFINED core-distance case). O(min_pts log n)
+    // instead of scanning the whole eps-neighborhood. Matches the value of the
+    // nth_element scan exactly (same kth distance), so it does not change results.
+    std::optional<double> knn_core_dist(const Point& p, std::size_t min_pts, T r) const {
+        thread_local std::vector<std::size_t> idx;
+        thread_local std::vector<T> dist_sq;
+        idx.resize(min_pts);
+        dist_sq.resize(min_pts);
+        const std::size_t found = index_.knnSearch(p.data(), min_pts, idx.data(), dist_sq.data());
+        if (found < min_pts) return std::nullopt;
+        const T kth_sq = dist_sq[min_pts - 1];
+        if (kth_sq > r * r) return std::nullopt;
+        return std::sqrt(static_cast<double>(kth_sq));
     }
 
 private:

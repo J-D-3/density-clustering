@@ -317,6 +317,34 @@ TEST_CASE("neighbor_mode_tests") {
 }
 
 
+TEST_CASE("core_dist_mode parity: Knn matches Scan") {
+	// The k-NN core-distance path (issue #24) must produce results bit-identical to
+	// the eps-neighborhood scan: it returns the same kth-nearest distance value.
+	using point = std::array<double, 2>;
+
+	// Gaussian blobs + uniform noise + a dense block of identical points to exercise
+	// the dense-neighborhood regime Knn targets (and tie handling at the kth distance).
+	auto points = optics::testdata::make_blobs<double, 2>( 4, 150, 50.0, 2.0, 123 );
+	const auto noise = optics::testdata::uniform_noise<double, 2>( 100, -60.0, 60.0, 9 );
+	points.insert( points.end(), noise.begin(), noise.end() );
+	for ( int i = 0; i < 40; ++i ) { points.push_back( point{ 5.0, 5.0 } ); }
+
+	const std::size_t min_pts = 8;
+	const auto scan = optics::compute_reachability_dists(
+		points, min_pts, -1.0, optics::NeighborMode::Precompute, 1, optics::CoreDistMode::Scan );
+	const auto knn = optics::compute_reachability_dists(
+		points, min_pts, -1.0, optics::NeighborMode::Precompute, 1, optics::CoreDistMode::Knn );
+	const auto knn_ondemand = optics::compute_reachability_dists(
+		points, min_pts, -1.0, optics::NeighborMode::OnDemand, 1, optics::CoreDistMode::Knn );
+
+	CHECK( scan.size() == points.size() );
+	CHECK( ( knn == scan ) );
+	CHECK( ( knn_ondemand == scan ) );
+
+	std::cout << "CoreDistMode Knn/Scan parity tests successful!" << std::endl;
+}
+
+
 TEST_CASE("chi_test_11") {
    std::vector<optics::reachability_dist> reach_dists = {
 	   {0,-1.000000}, {1,-1.000000}, {2,-1.000000}, {3,-1.000000}, {4,-1.000000}, {5,-1.000000}, {6,-1.000000}, {7,-1.000000}, {8,-1.000000},
