@@ -65,3 +65,28 @@ mean; `--no-spheres` hides the enclosing spheres.
 Because OPTICS is density-based, you do **not** specify the number of clusters —
 it finds the color modes present, and reveals finer structure as you relax the
 density parameters.
+
+## Performance note (important for images)
+
+OPTICS runtime is dominated by **neighborhood size**: each point is processed
+against every other point within `eps`. Images often contain large **flat-color
+regions** (a white or orange background), so with a generous `eps` a single
+neighborhood can contain tens of thousands of points and the ordering pass
+becomes ~O(region²) — seconds to minutes. Keep `eps` small (it shrinks
+neighborhoods *and* separates color modes), and/or reduce `--max-dim`. The CSV
+round-trip in this example is **not** the bottleneck (tens of ms); the algorithm
+on dense data is.
+
+`compare_kmeans.py` times the OPTICS ordering against scikit-learn k-means (told
+the cluster count OPTICS found) on the same pixels:
+
+```sh
+python examples/color_clustering/compare_kmeans.py <image> \
+    --exe build/examples/Release/optics_color.exe --max-dim 240 --eps 3 ...
+```
+
+Observed (these images, ~40–50k px): a single k-means fit is ~35–50 ms regardless
+of parameters, while OPTICS ranges from ~0.3 s (small `eps`) to 10–25 s (large
+`eps`, dense background). k-means is faster and runtime-stable but needs `k` and
+force-assigns every pixel; OPTICS finds `k` itself and separates noise/edge
+colors. Needs `pip install scikit-learn`.

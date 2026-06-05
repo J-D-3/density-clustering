@@ -14,12 +14,18 @@
 #include <optics/io.hpp>
 
 #include <array>
+#include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
+
+namespace {
+using clk = std::chrono::steady_clock;
+double ms( clk::time_point a, clk::time_point b ) { return std::chrono::duration<double, std::milli>( b - a ).count(); }
+}  // namespace
 
 int main( int argc, char** argv ) {
 	if ( argc < 3 ) {
@@ -34,6 +40,7 @@ int main( int argc, char** argv ) {
 	const double min_cluster_frac = ( argc > 6 ) ? std::atof( argv[6] ) : 0.01;
 
 	// Read the RGB cloud.
+	const auto t_read0 = clk::now();
 	std::vector<std::array<float, 3>> points;
 	std::ifstream in( in_path );
 	if ( !in ) { std::cerr << "cannot open " << in_path << "\n"; return 1; }
@@ -51,14 +58,21 @@ int main( int argc, char** argv ) {
 		}
 		if ( ok && k == 3 ) { points.push_back( p ); }  // non-numeric (header) rows are skipped
 	}
+	const auto t_read1 = clk::now();
 	std::cout << "loaded " << points.size() << " RGB points from " << in_path << "\n";
 	if ( points.empty() ) { return 1; }
 
 	// Cluster the color space.
+	const auto t_optics0 = clk::now();
 	const auto reach = optics::compute_reachability_dists( points, min_pts, eps );
+	const auto t_optics1 = clk::now();
 	const auto clusters = optics::get_cluster_indices( reach, threshold );
 	const std::size_t min_size = static_cast<std::size_t>( min_cluster_frac * static_cast<double>( points.size() ) );
 	const auto labels = optics::io::cluster_labels( points.size(), clusters, min_size );
+	const auto t_extract = clk::now();
+
+	std::cout << "timing: csv-read " << ms( t_read0, t_read1 ) << " ms | OPTICS ordering "
+			  << ms( t_optics0, t_optics1 ) << " ms | extract " << ms( t_optics1, t_extract ) << " ms\n";
 
 	optics::io::export_points_csv( out_path, points, labels );
 
