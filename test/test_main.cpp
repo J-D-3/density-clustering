@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <iostream>
+#include <random>
 #include <vector>
 
 
@@ -274,6 +275,39 @@ void chi_test_10() {
 	std::size_t min_pts = 4;
 	auto clusters = optics::get_chi_clusters_flat( reach_dists, chi, min_pts );
 	assert( (clusters == std::vector<std::pair<std::size_t, std::size_t>>( { { 0, 2 },{ 3, 6 }, {8,12} } )) );
+}
+
+
+// The neighbor sets are identical regardless of how they are acquired, so the
+// reachability ordering must be byte-for-byte identical across Precompute (any
+// thread count) and OnDemand. This pins the P4 parallelism/mode machinery.
+void neighbor_mode_tests() {
+	static const int N = 2;
+	typedef std::array<double, N> point;
+
+	std::mt19937 gen( 12345 );
+	std::normal_distribution<double> jitter( 0.0, 1.5 );
+	const std::array<point, 3> centers = { point{ 0, 0 }, point{ 40, 5 }, point{ 10, 35 } };
+
+	std::vector<point> points;
+	points.reserve( 600 );
+	for ( const auto& c : centers ) {
+		for ( int i = 0; i < 200; ++i ) {
+			points.push_back( { c[0] + jitter( gen ), c[1] + jitter( gen ) } );
+		}
+	}
+
+	const std::size_t min_pts = 8;
+	const auto baseline = optics::compute_reachability_dists( points, min_pts, -1.0, optics::NeighborMode::Precompute, 1 );
+
+	const auto precompute_4t = optics::compute_reachability_dists( points, min_pts, -1.0, optics::NeighborMode::Precompute, 4 );
+	const auto on_demand = optics::compute_reachability_dists( points, min_pts, -1.0, optics::NeighborMode::OnDemand, 1 );
+
+	assert( baseline.size() == points.size() );
+	assert( precompute_4t == baseline );
+	assert( on_demand == baseline );
+
+	std::cout << "Neighbor-mode parity tests successful!" << std::endl;
 }
 
 
@@ -578,6 +612,7 @@ int main()
 	chi_cluster_tests();
 	chi_cluster_tree_tests();
 	clustering_tests();
+	neighbor_mode_tests();
 
 	return 0;
 }
