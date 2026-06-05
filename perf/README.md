@@ -32,3 +32,21 @@ days-old `baseline.csv` and trust small deltas. Instead, for each essential chan
 Refresh `baseline.csv` after each landed Tier-0 change so it tracks the current best.
 CI may run `optics_perf` informationally, but timings are **not** a gate (runner hardware
 varies).
+
+## Large-scale validation (`optics_scale`)
+
+`optics_scale [n]` times the 3D color-space-style workload (uniform cloud, min_pts=16) at
+1e6–1e7 points. Baselines on a 22-thread desktop (Release), committed-code path:
+
+| workload      | Precompute (xHW) | OnDemand (x1) |
+|---------------|------------------|---------------|
+| 3D float  1e6 | ~5.8 s           | ~7.8 s        |
+| 3D double 1e6 | ~6.7 s           | ~9.3 s        |
+| 3D float  1e7 | ~44.0 s          | ~52.0 s       |
+| 3D double 1e7 | ~45.7 s          | ~55.7 s       |
+
+Both modes order the full cloud; Precompute did not OOM at 1e7 on the desktop. Note the modest
+Precompute-vs-OnDemand gap at 1e7: the sequential ordering loop is a large fraction at this
+scale, so parallelizing only the query phase is Amdahl-limited. Confirms the Tier-0 finding that
+OPTICS is **query-bound** — future speedups live in the query path (backend, approximate-NN),
+not the surrounding bookkeeping.
