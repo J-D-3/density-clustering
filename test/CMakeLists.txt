@@ -32,3 +32,7 @@ target_compile_options(optics_benchmark PRIVATE
 add_executable(optics_perf Benchmark/perf.cpp)
 target_link_libraries(optics_perf PRIVATE optics::optics)
 target_include_directories(optics_perf SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+
+# Large-scale (1e6-1e7) 3D timing harness. Release config; not a ctest.
+add_executable(optics_scale Benchmark/scale.cpp)
+target_link_libraries(optics_scale PRIVATE optics::optics)
