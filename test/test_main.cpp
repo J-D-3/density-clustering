@@ -753,10 +753,11 @@ TEST_CASE("convenience: convert_cloud + cluster_dbscan + extract_xi") {
 
 
 #ifdef OPTICS_ENABLE_BOOST_RTREE
-// Only built when the optional Boost backend is enabled. Verifies that the
-// Boost R*-tree backend returns the same neighbor sets as nanoflann, and that
-// it produces the same number of clusters end-to-end.
-TEST_CASE("boost_backend_tests") {
+// Only built when the optional Boost backend is enabled. Verifies that the Boost
+// R*-tree backend is interchangeable with nanoflann (issue #27): identical
+// neighbor sets at several radii, identical OPTICS ordering end-to-end, and the
+// expected dense clusters.
+TEST_CASE("boost_backend_tests: nanoflann/boost equivalence") {
 	static const int N = 2;
 	typedef std::array<double, N> point;
 	const std::vector<point> centers = { { 0, 0 }, { 60, 0 }, { 30, 50 } };
@@ -764,15 +765,25 @@ TEST_CASE("boost_backend_tests") {
 
 	const optics::NanoflannBackend<double, N> nano( points );
 	const optics::BoostRTreeBackend<double, N> boost_be( points );
-	const double eps = 5.0;
-	for ( std::size_t i = 0; i < points.size(); ++i ) {
-		std::vector<std::size_t> a, b;
-		nano.radius_search( points[i], eps, a );
-		boost_be.radius_search( points[i], eps, b );
-		CHECK( sorted( a ) == sorted( b ) );
+
+	// 1) Identical neighbor sets at several radii (sparse, mid, and dense).
+	for ( const double eps : { 2.0, 5.0, 12.0 } ) {
+		for ( std::size_t i = 0; i < points.size(); ++i ) {
+			std::vector<std::size_t> a, b;
+			nano.radius_search( points[i], static_cast<double>( eps ), a );
+			boost_be.radius_search( points[i], static_cast<double>( eps ), b );
+			CHECK( ( sorted( a ) == sorted( b ) ) );
+		}
 	}
 
+	// 2) Identical OPTICS ordering end-to-end. Equal neighbor sets imply equal
+	//    reachability and ordering: tie-breaks are by point index, so neighbor
+	//    iteration order (which differs between the backends) does not matter.
+	const auto reach_nano = optics::compute_reachability_dists<double, N>( points, 10, 10.0 );
 	const auto reach_boost = optics::compute_reachability_dists<double, N, optics::BoostRTreeBackend<double, N>>( points, 10, 10.0 );
+	CHECK( ( reach_nano == reach_boost ) );
+
+	// 3) The expected three dense clusters survive a threshold cut.
 	const auto clusters = optics::get_cluster_indices( reach_boost, 10.0 );
 	std::size_t large = 0;
 	for ( const auto& c : clusters ) { if ( c.size() >= 50 ) ++large; }
