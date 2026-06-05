@@ -1,0 +1,9 @@
+"title";"name";"unit";"batch";"elapsed";"error %";"instructions";"branches";"branch misses";"total"
+"OPTICS perf (hw=22)";"core_dist 3D double (30k)";"op";30000;0.008246625;0.00932570538666851;0;0;0;0.977403
+"OPTICS perf (hw=22)";"core_dist 3D float  (30k)";"op";30000;0.00850875833333333;0.0216928065723631;0;0;0;1.0364392
+"OPTICS perf (hw=22)";"core_dist 16D double (8k)";"op";8000;3.85392857142857e-05;0.0614261628218166;0;0;0;0.012375
+"OPTICS perf (hw=22)";"ordering 3D double 30k precompute x1";"op";1;0.129211566666667;0.0339616390825985;0;0;0;4.7378467
+"OPTICS perf (hw=22)";"ordering 3D double 30k precompute xHW";"op";1;0.0714524333333333;0.0618996830014152;0;0;0;3.0279888
+"OPTICS perf (hw=22)";"ordering 3D double 30k ondemand x1";"op";1;0.0975381666666667;0.0360874094353638;0;0;0;3.3894675
+"OPTICS perf (hw=22)";"ordering 3D float 30k precompute xHW";"op";1;0.0689805;0.0135712808036281;0;0;0;2.3501595
+"OPTICS perf (hw=22)";"ordering 16D double 8k precompute xHW";"op";1;0.111943566666667;0.0755331577428996;0;0;0;3.7781464

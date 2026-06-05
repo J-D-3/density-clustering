@@ -45,6 +45,12 @@ optics::compute_reachability_dists<T, Dim, Backend>(
     n_threads = 0);                         // 0 => hardware concurrency
 ```
 
+### Convenience helpers
+
+- `optics::cluster_dbscan(points, min_pts, threshold)` — compute the ordering and cut at a threshold in one call (returns one index list per cluster).
+- `optics::extract_xi(reach_dists, chi, min_pts)` — Xi (steep-area) clusters as point-index lists.
+- `optics::convert_cloud<float>(int_points)` — convert an integer/byte cloud (e.g. `uint8` color data) to a floating-point cloud, since `T` must be `float`/`double`.
+
 ### Visualizing results
 
 The core writes no images; export CSV and render with the bundled script (matplotlib):
@@ -64,7 +70,7 @@ python tools/visualize.py --points points.csv --reach reach.csv --out plot.png
 
 ## Dependencies
 
-None required: [nanoflann](https://github.com/jlblancoc/nanoflann) is vendored under `include/optics/`, and everything else is the C++ standard library. **Boost** is an optional alternative neighbor-search backend, enabled with `-DOPTICS_ENABLE_BOOST_RTREE=ON`.
+None required: [nanoflann](https://github.com/jlblancoc/nanoflann) (BSD 2-Clause) is vendored under `include/optics/`, and everything else is the C++ standard library. **Boost** is an optional alternative neighbor-search backend, enabled with `-DOPTICS_ENABLE_BOOST_RTREE=ON`. Bundled third-party licenses are listed in [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md).
 
 ## Building & testing
 
@@ -78,4 +84,4 @@ ctest --preset linux-gcc
 
 ## License
 
-Distributed under the MIT Software License (X11 license). (See accompanying file LICENSE.)
+Distributed under the MIT Software License (X11 license). (See accompanying file LICENSE.) Bundled third-party components and their licenses are listed in [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md).

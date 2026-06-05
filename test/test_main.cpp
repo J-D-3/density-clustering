@@ -4,13 +4,18 @@
 // (See accompanying file LICENSE)
 
 
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include "third_party/doctest.h"
+
 #include "../include/optics/optics.hpp"
 #include "../include/optics/testdata.hpp"
 
 #include <algorithm>
 #include <array>
 #include <iostream>
+#include <optional>
 #include <random>
+#include <set>
 #include <vector>
 
 
@@ -22,7 +27,7 @@ C sorted( C c ) {
 }
 
 
-void clustering_test_1(){
+TEST_CASE("clustering_test_1") {
 	static const int N = 2;
 	typedef std::array<double, N> point; //A list of N cartesian coordinates makes a point
 
@@ -37,14 +42,14 @@ void clustering_test_1(){
 	}*/
 
 	auto clusters = optics::get_cluster_indices(reach_dists, 10);
-	assert(clusters.size() == 3);
-	assert( ( sorted( clusters[0] ) == std::vector <std::size_t>({ 0,1,2 }) ) );
-	assert( ( sorted( clusters[1] ) == std::vector <std::size_t>({ 3,4,5 }) ) );
-	assert( ( sorted( clusters[2] ) == std::vector <std::size_t>({ 6,7,8 }) ) );
+	CHECK(clusters.size() == 3);
+	CHECK( ( sorted( clusters[0] ) == std::vector <std::size_t>({ 0,1,2 }) ) );
+	CHECK( ( sorted( clusters[1] ) == std::vector <std::size_t>({ 3,4,5 }) ) );
+	CHECK( ( sorted( clusters[2] ) == std::vector <std::size_t>({ 6,7,8 }) ) );
 }
 
 
-void clustering_test_2() {
+TEST_CASE("clustering_test_2") {
 	static const int N = 2;
 	typedef std::array<double, N> point; //A list of N cartesian coordinates makes a point
 
@@ -59,14 +64,14 @@ void clustering_test_2() {
 	}*/
 
 	auto clusters = optics::get_cluster_indices( reach_dists, 2 );
-	assert( clusters.size() == 3 );
-	assert( (sorted( clusters[0] ) == std::vector <std::size_t>( { 0,1,2 } )) );
-	assert( (sorted( clusters[1] ) == std::vector <std::size_t>( { 3,4,5 } )) );
-	assert( (sorted( clusters[2] ) == std::vector <std::size_t>( { 6,7,8 } )) );
+	CHECK( clusters.size() == 3 );
+	CHECK( (sorted( clusters[0] ) == std::vector <std::size_t>( { 0,1,2 } )) );
+	CHECK( (sorted( clusters[1] ) == std::vector <std::size_t>( { 3,4,5 } )) );
+	CHECK( (sorted( clusters[2] ) == std::vector <std::size_t>( { 6,7,8 } )) );
 }
 
 
-void clustering_test_3(){
+TEST_CASE("clustering_test_3") {
 	static const int N = 2;
 	typedef std::array<double, N> point; //A list of N cartesian coordinates makes a point
 
@@ -79,17 +84,17 @@ void clustering_test_3(){
 	auto reach_dists = optics::compute_reachability_dists( points, 2, 10 );
 
 	auto clusters = optics::get_cluster_indices( reach_dists, 10 );
-	assert( clusters.size() == 3 );
-	assert( (sorted( clusters[0] ) == std::vector <std::size_t>( { 0,1,2 } )) );
-	assert( (sorted( clusters[1] ) == std::vector <std::size_t>( { 3,4,5 } )) );
-	assert( (sorted( clusters[2] ) == std::vector <std::size_t>( { 6,7,8 } )) );
+	CHECK( clusters.size() == 3 );
+	CHECK( (sorted( clusters[0] ) == std::vector <std::size_t>( { 0,1,2 } )) );
+	CHECK( (sorted( clusters[1] ) == std::vector <std::size_t>( { 3,4,5 } )) );
+	CHECK( (sorted( clusters[2] ) == std::vector <std::size_t>( { 6,7,8 } )) );
 
 	auto cluster_points = optics::get_cluster_points(reach_dists, 10, points);
-	assert( cluster_points.size() == 3 );
+	CHECK( cluster_points.size() == 3 );
 }
 
 
-void epsilon_estimation_test_1() {
+TEST_CASE("epsilon_estimation_test_1") {
 	static const int N = 2;
 	typedef std::array<double, N> point; //A list of N cartesian coordinates makes a point
 
@@ -100,9 +105,9 @@ void epsilon_estimation_test_1() {
 	};
 
 	double epsilon_est = optics::epsilon_estimation( points, 3 );
-	assert( epsilon_est <3.090196 && epsilon_est >3.09019 );
+	CHECK( (epsilon_est < 3.090196 && epsilon_est > 3.09019) );
 }
-void epsilon_estimation_test_2() {
+TEST_CASE("epsilon_estimation_test_2") {
 	static const int N = 3;
 	typedef std::array<double, N> point; //A list of N cartesian coordinates makes a point
 
@@ -112,11 +117,11 @@ void epsilon_estimation_test_2() {
 	};
 
 	double epsilon_est = optics::epsilon_estimation( points, 3 );
-	assert( epsilon_est >2.236750 && epsilon_est <2.236751 );
+	CHECK( (epsilon_est > 2.236750 && epsilon_est < 2.236751) );
 }
 
 
-void chi_test_1(){
+TEST_CASE("chi_test_1") {
 	std::vector<optics::reachability_dist> reach_dists = {
 		{1,10.0}, {2,9.0}, {3,9.0}, {4, 5.0},//SDA
 		{5,5.49}, {6,5.0},//Cluster1
@@ -129,9 +134,9 @@ void chi_test_1(){
 	std::size_t min_pts = 4;
    auto clusters = optics::get_chi_clusters_flat( reach_dists, chi, min_pts );
    std::vector<std::pair<std::size_t, std::size_t>> exp ({ {2, 5}, {0, 11}, { 6,10 } });
-   assert( clusters == exp );
+   CHECK( clusters == exp );
 }
-void chi_test_2() {
+TEST_CASE("chi_test_2") {
 	std::vector<optics::reachability_dist> reach_dists = {
 		{ 1,10.0 },{ 2,9.0 },{ 3,9.0 },{ 4, 5.0 },//SDA
 		{ 5,5.49 },{ 6,5.0 },//Cluster1
@@ -146,9 +151,9 @@ void chi_test_2() {
 	double chi = 0.1;
 	std::size_t min_pts = 4;
 	auto clusters = optics::get_chi_clusters_flat( reach_dists, chi, min_pts );
-	assert( (clusters == std::vector<std::pair<std::size_t, std::size_t>>( { { 2, 5 },{ 0, 10 },{ 6,10 }, {11,16} } )) );
+	CHECK( (clusters == std::vector<std::pair<std::size_t, std::size_t>>( { { 2, 5 },{ 0, 10 },{ 6,10 }, {11,16} } )) );
 }
-void chi_test_3() {
+TEST_CASE("chi_test_3") {
 	std::vector<optics::reachability_dist> reach_dists = {
 		{ 1,11.0 },{ 2,9.0 },{ 3,9.0 },{ 4, 5.0 },//SDA
 		{ 5,5.49 },{ 6,5.0 },//Cluster1
@@ -163,9 +168,9 @@ void chi_test_3() {
 	double chi = 0.1;
 	std::size_t min_pts = 4;
 	auto clusters = optics::get_chi_clusters_flat( reach_dists, chi, min_pts );
-	assert( (clusters == std::vector<std::pair<std::size_t, std::size_t>>( { { 2, 5 },{ 0, 9 },{ 6,10 },{0,16},{ 11,16 } } )) );
+	CHECK( (clusters == std::vector<std::pair<std::size_t, std::size_t>>( { { 2, 5 },{ 0, 9 },{ 6,10 },{0,16},{ 11,16 } } )) );
 }
-void chi_test_4() {
+TEST_CASE("chi_test_4") {
 	std::vector<optics::reachability_dist> reach_dists = {
 		{ 1,12.0 },{ 2,9.0 },{ 3,9.0 },{ 4, 5.0 },//SDA
 		{ 5,5.49 },{ 6,5.0 },//Cluster1
@@ -180,9 +185,9 @@ void chi_test_4() {
 	double chi = 0.1;
 	std::size_t min_pts = 4;
 	auto clusters = optics::get_chi_clusters_flat( reach_dists, chi, min_pts );
-	assert( (clusters == std::vector<std::pair<std::size_t, std::size_t>>( { { 2, 5 },{ 0, 9 },{ 6,10 },{0,16},{ 11,16 } } )) );
+	CHECK( (clusters == std::vector<std::pair<std::size_t, std::size_t>>( { { 2, 5 },{ 0, 9 },{ 6,10 },{0,16},{ 11,16 } } )) );
 }
-void chi_test_5() {
+TEST_CASE("chi_test_5") {
 	std::vector<optics::reachability_dist> reach_dists = {
 		{ 1,12.0 },{ 2,9.0 },{ 3,9.0 },{ 4, 5.0 },//SDA
 		{ 5,5.49 },{ 6,5.0 },//Cluster1
@@ -197,9 +202,9 @@ void chi_test_5() {
 	double chi = 0.1;
 	std::size_t min_pts = 4;
 	auto clusters = optics::get_chi_clusters_flat( reach_dists, chi, min_pts );
-	assert( (clusters == std::vector<std::pair<std::size_t, std::size_t>>( { { 2, 5 },{ 0, 9 },{ 6,10 },{0,16},{ 11,16 } } )) );
+	CHECK( (clusters == std::vector<std::pair<std::size_t, std::size_t>>( { { 2, 5 },{ 0, 9 },{ 6,10 },{0,16},{ 11,16 } } )) );
 }
-void chi_test_6() {
+TEST_CASE("chi_test_6") {
 	std::vector<optics::reachability_dist> reach_dists = {
 		{ 1,12.0 },{ 2,9.0 },{ 3,9.0 },{ 4, 5.0 },//SDA
 		{ 5,5.49 },{ 6,5.0 },//Cluster1
@@ -213,9 +218,9 @@ void chi_test_6() {
 	double chi = 0.1;
 	std::size_t min_pts = 4;
 	auto clusters = optics::get_chi_clusters_flat( reach_dists, chi, min_pts );
-	assert( (clusters == std::vector<std::pair<std::size_t, std::size_t>>( { { 2, 5 },{ 0, 9 },{ 6,10 },{2,15},{ 11,15 } } )) );
+	CHECK( (clusters == std::vector<std::pair<std::size_t, std::size_t>>( { { 2, 5 },{ 0, 9 },{ 6,10 },{2,15},{ 11,15 } } )) );
 }
-void chi_test_7() {
+TEST_CASE("chi_test_7") {
 	std::vector<optics::reachability_dist> reach_dists = {
 		{ 1,12.0 },{ 2,9.0 },{ 3,9.0 },{ 4, 5.0 },//SDA
 		{ 5,5.49 },{ 6,5.0 },//Cluster1
@@ -229,9 +234,9 @@ void chi_test_7() {
 	double chi = 0.1;
 	std::size_t min_pts = 4;
 	auto clusters = optics::get_chi_clusters_flat( reach_dists, chi, min_pts );
-	assert( (clusters == std::vector<std::pair<std::size_t, std::size_t>>( { { 0, 5 },{ 6, 9 },{6,15},{ 11,15 } } )) );
+	CHECK( (clusters == std::vector<std::pair<std::size_t, std::size_t>>( { { 0, 5 },{ 6, 9 },{6,15},{ 11,15 } } )) );
 }
-void chi_test_8() {
+TEST_CASE("chi_test_8") {
 	std::vector<optics::reachability_dist> reach_dists = {
 		{ 1,12.0 },{ 2,9.0 },{ 3,9.0 },{ 4, 5.0 },//SDA
 		{ 5,5.49 },{ 6,5.0 },//Cluster1
@@ -245,9 +250,9 @@ void chi_test_8() {
 	double chi = 0.1;
 	std::size_t min_pts = 4;
 	auto clusters = optics::get_chi_clusters_flat( reach_dists, chi, min_pts );
-	assert( (clusters == std::vector<std::pair<std::size_t, std::size_t>>( { { 0, 5 },{ 6, 9 },{ 11,15 } } )) );
+	CHECK( (clusters == std::vector<std::pair<std::size_t, std::size_t>>( { { 0, 5 },{ 6, 9 },{ 11,15 } } )) );
 }
-void chi_test_9() {
+TEST_CASE("chi_test_9") {
 	std::vector<optics::reachability_dist> reach_dists = {
 		{ 0, 5.0 }, { 1,5.49 },{ 2,5.0 },//Cluster1
 		{ 3, 11.0 },//SUA
@@ -260,9 +265,9 @@ void chi_test_9() {
 	double chi = 0.1;
 	std::size_t min_pts = 4;
 	auto clusters = optics::get_chi_clusters_flat( reach_dists, chi, min_pts );
-	assert( (clusters == std::vector<std::pair<std::size_t, std::size_t>>( { { 0, 2 },{ 3, 6 },{ 3,12 }, {8,12} } )) );
+	CHECK( (clusters == std::vector<std::pair<std::size_t, std::size_t>>( { { 0, 2 },{ 3, 6 },{ 3,12 }, {8,12} } )) );
 }
-void chi_test_10() {
+TEST_CASE("chi_test_10") {
 	std::vector<optics::reachability_dist> reach_dists = {
 		{ 0, 5.0 }, { 1,5.49 },{ 2,5.0 },//Cluster1
 		{ 3, 11.0 },//SUA
@@ -275,14 +280,14 @@ void chi_test_10() {
 	double chi = 0.1;
 	std::size_t min_pts = 4;
 	auto clusters = optics::get_chi_clusters_flat( reach_dists, chi, min_pts );
-	assert( (clusters == std::vector<std::pair<std::size_t, std::size_t>>( { { 0, 2 },{ 3, 6 }, {8,12} } )) );
+	CHECK( (clusters == std::vector<std::pair<std::size_t, std::size_t>>( { { 0, 2 },{ 3, 6 }, {8,12} } )) );
 }
 
 
 // The neighbor sets are identical regardless of how they are acquired, so the
 // reachability ordering must be byte-for-byte identical across Precompute (any
 // thread count) and OnDemand. This pins the P4 parallelism/mode machinery.
-void neighbor_mode_tests() {
+TEST_CASE("neighbor_mode_tests") {
 	static const int N = 2;
 	typedef std::array<double, N> point;
 
@@ -304,24 +309,15 @@ void neighbor_mode_tests() {
 	const auto precompute_4t = optics::compute_reachability_dists( points, min_pts, -1.0, optics::NeighborMode::Precompute, 4 );
 	const auto on_demand = optics::compute_reachability_dists( points, min_pts, -1.0, optics::NeighborMode::OnDemand, 1 );
 
-	assert( baseline.size() == points.size() );
-	assert( precompute_4t == baseline );
-	assert( on_demand == baseline );
+	CHECK( baseline.size() == points.size() );
+	CHECK( precompute_4t == baseline );
+	CHECK( on_demand == baseline );
 
 	std::cout << "Neighbor-mode parity tests successful!" << std::endl;
 }
 
 
-void clustering_tests() {
-	clustering_test_1();
-	clustering_test_2();
-	clustering_test_3();
-
-	std::cout << "Clustering tests successful!" << std::endl;
-}
-
-
-void chi_test_11(){
+TEST_CASE("chi_test_11") {
    std::vector<optics::reachability_dist> reach_dists = {
 	   {0,-1.000000}, {1,-1.000000}, {2,-1.000000}, {3,-1.000000}, {4,-1.000000}, {5,-1.000000}, {6,-1.000000}, {7,-1.000000}, {8,-1.000000},
 	   {9,-1.000000}, {10,-1.000000}, {11,-1.000000}, {12,-1.000000}, {13,-1.000000}, {14,-1.000000}, {15,-1.000000}, {16,-1.000000},
@@ -440,7 +436,7 @@ void chi_test_11(){
 	   auto clusters = optics::get_chi_clusters_flat( reach_dists, chi, min_pts, steep_area_min_diff );
 	   std::vector<std::pair<std::size_t, std::size_t>> expected_result =
 	   { { 155, 162 },{ 203, 225 },{ 295, 299 },{ 300, 304 },{ 271, 358 },{ 270, 372 },{ 150, 407 },{ 422, 493 },{ 590, 607 },{ 626, 642 },{ 412, 684 },{ 700, 711 } };
-	   assert( (clusters == expected_result) );
+	   CHECK( (clusters == expected_result) );
    }
 
    {
@@ -452,37 +448,12 @@ void chi_test_11(){
 	   std::vector<std::pair<std::size_t, std::size_t>> expected_result =
 		{ {155, 160}, {208, 217}, {276, 321}, {271, 355}, {150, 407}, {425, 470},
 		{425, 487}, {598, 606}, {626, 642}, {623, 650}, {412, 684}, {700, 711} };
-	   assert( (clusters2 == expected_result) );
+	   CHECK( (clusters2 == expected_result) );
    }
 }
 
 
-void chi_cluster_tests(){
-	chi_test_1();
-	chi_test_2();
-	chi_test_3();
-	chi_test_4();
-	chi_test_5();
-	chi_test_6();
-	chi_test_7();
-	chi_test_8();
-	chi_test_9();
-	chi_test_10();
-	chi_test_11();
-
-	std::cout << "Chi cluster extraction tests successful!" << std::endl;
-}
-
-
-void epsilon_estimation_tests(){
-	epsilon_estimation_test_1();
-	epsilon_estimation_test_2();
-
-	std::cout << "Epsilon estimation tests successful!" << std::endl;
-}
-
-
-void tree_tests() {
+TEST_CASE("tree_tests") {
 	typedef std::pair<std::size_t, std::size_t> cluster;
 	typedef optics::Node<cluster> Node;
 
@@ -490,14 +461,14 @@ void tree_tests() {
 		optics::Node<cluster> n( { 0,5 } );
 		optics::Tree<cluster> T( n );
 		auto c = T.flatten();
-		assert( c == std::vector<cluster>( { cluster( 0, 5 ) } ) );
+		CHECK( c == std::vector<cluster>( { cluster( 0, 5 ) } ) );
 	}
 
 	{
 		optics::Node<cluster> n( { 0,5 } );
 		optics::Tree<cluster> T( n );
 		auto c = T.flatten();
-		assert( c == std::vector<cluster>( { cluster( 0, 5 ) } ) );
+		CHECK( c == std::vector<cluster>( { cluster( 0, 5 ) } ) );
 	}
 
 	{
@@ -531,7 +502,7 @@ bool trees_are_equal( const optics::Node<optics::chi_cluster_indices>& t1, const
 	return true;
 }
 
-void chi_cluster_tree_tests_1() {
+TEST_CASE("chi_cluster_tree_tests_1") {
 	std::vector<optics::reachability_dist> reach_dists = {
 		{ 1,10.0 },{ 2,9.0 },{ 3,9.0 },{ 4, 5.0 },//SDA
 		{ 5,5.49 },{ 6,5.0 },//Cluster1
@@ -543,7 +514,7 @@ void chi_cluster_tree_tests_1() {
 	double chi = 0.1;
 	std::size_t min_pts = 4;
 	auto clusters = optics::get_chi_clusters( reach_dists, chi, min_pts );
-	assert( clusters.size() == 1 );
+	CHECK( clusters.size() == 1 );
 
 	optics::cluster_tree expected_result =
 	{
@@ -555,11 +526,11 @@ void chi_cluster_tree_tests_1() {
 			}
 		}
 	};
-	assert( trees_are_equal(clusters.front().get_root(), expected_result.get_root() ) );
+	CHECK( trees_are_equal(clusters.front().get_root(), expected_result.get_root() ) );
 }
 
 
-void chi_cluster_tree_tests_2() {
+TEST_CASE("chi_cluster_tree_tests_2") {
 	std::vector<optics::chi_cluster_indices> flat_clusters = {
 		{0,4}, {0,8}, {5,7},
 		{9,10}, {12,13}, {9,17}, {11,17}, {13,14}, {8,20}
@@ -590,27 +561,174 @@ void chi_cluster_tree_tests_2() {
 	});
 
 	auto clusters = optics::flat_clusters_to_tree( flat_clusters );
-	assert( clusters.size() == 2 );
-	assert( trees_are_equal( clusters[0].get_root(), expected_result[0].get_root() ) );
-	assert( trees_are_equal( clusters[1].get_root(), expected_result[1].get_root() ) );
+	CHECK( clusters.size() == 2 );
+	CHECK( trees_are_equal( clusters[0].get_root(), expected_result[0].get_root() ) );
+	CHECK( trees_are_equal( clusters[1].get_root(), expected_result[1].get_root() ) );
 }
 
 
-void chi_cluster_tree_tests() {
-	chi_cluster_tree_tests_1();
-	chi_cluster_tree_tests_2();
+// Naive O(n^2) OPTICS reference: brute-force neighbor scan + linear-scan seed
+// selection. Uses the same distance primitives so the ordering must match the
+// optimized library bit-for-bit; the independence is in the control flow
+// (no kd-tree, no heap), which is exactly what we want to validate.
+template <class T, std::size_t Dim>
+std::vector<optics::reachability_dist> brute_force_optics(
+	const std::vector<std::array<T, Dim>>& points, std::size_t min_pts, double eps ) {
+	const std::size_t n = points.size();
+	const double eps2 = eps * eps;
+	std::vector<char> processed( n, 0 );
+	std::vector<double> reach( n, -1.0 );
+	std::vector<std::size_t> order;
+	std::set<std::size_t> seeds;
 
-	std::cout << "Chi-Cluster-Tree tests successful!" << std::endl;
+	const auto neighbors = [&]( std::size_t i ) {
+		std::vector<std::size_t> r;
+		for ( std::size_t j = 0; j < n; ++j ) {
+			if ( optics::detail::square_dist( points[i], points[j] ) <= eps2 ) { r.push_back( j ); }
+		}
+		return r;
+	};
+	const auto core_dist = [&]( std::size_t i, const std::vector<std::size_t>& nb ) -> std::optional<double> {
+		if ( nb.size() < min_pts ) { return std::nullopt; }
+		std::vector<double> sq;
+		for ( std::size_t j : nb ) { sq.push_back( optics::detail::square_dist( points[i], points[j] ) ); }
+		std::sort( sq.begin(), sq.end() );
+		return std::sqrt( sq[min_pts - 1] );
+	};
+	const auto relax = [&]( std::size_t i, const std::vector<std::size_t>& nb, double cd ) {
+		for ( std::size_t o : nb ) {
+			if ( processed[o] ) { continue; }
+			const double nrd = std::max( cd, optics::detail::dist( points[i], points[o] ) );
+			if ( reach[o] < 0.0 || nrd < reach[o] ) { reach[o] = nrd; seeds.insert( o ); }
+		}
+	};
+
+	for ( std::size_t i = 0; i < n; ++i ) {
+		if ( processed[i] ) { continue; }
+		processed[i] = 1;
+		order.push_back( i );
+		auto nb = neighbors( i );
+		if ( auto cd = core_dist( i, nb ) ) { relax( i, nb, *cd ); }
+		while ( !seeds.empty() ) {
+			const std::size_t best = *std::min_element( seeds.begin(), seeds.end(),
+				[&]( std::size_t a, std::size_t b ) { return reach[a] != reach[b] ? reach[a] < reach[b] : a < b; } );
+			seeds.erase( best );
+			if ( processed[best] ) { continue; }
+			processed[best] = 1;
+			order.push_back( best );
+			auto nb2 = neighbors( best );
+			if ( auto cd = core_dist( best, nb2 ) ) { relax( best, nb2, *cd ); }
+		}
+	}
+	std::vector<optics::reachability_dist> result;
+	for ( std::size_t idx : order ) { result.emplace_back( idx, reach[idx] ); }
+	return result;
 }
 
+TEST_CASE("reference: library matches brute-force O(n^2) OPTICS") {
+	// 2D: three well-separated blobs (no pairwise distance near eps).
+	{
+		const std::vector<std::array<double, 2>> centers = { { 0, 0 }, { 40, 0 }, { 20, 35 } };
+		const auto points = optics::testdata::gaussian_blobs<double, 2>( centers, 40, 1.5 );
+		const std::size_t min_pts = 5;
+		const double eps = 15.0;
+		const auto ref = brute_force_optics( points, min_pts, eps );
+		CHECK( optics::compute_reachability_dists( points, min_pts, eps, optics::NeighborMode::Precompute, 4 ) == ref );
+		CHECK( optics::compute_reachability_dists( points, min_pts, eps, optics::NeighborMode::OnDemand, 1 ) == ref );
+	}
+	// 3D, with some noise points (undefined core-distance paths).
+	{
+		const std::vector<std::array<double, 3>> centers = { { 0, 0, 0 }, { 50, 0, 0 }, { 0, 50, 0 } };
+		auto points = optics::testdata::gaussian_blobs<double, 3>( centers, 50, 2.0 );
+		const auto noise = optics::testdata::uniform_noise<double, 3>( 15, -30.0, 80.0, 99 );
+		points.insert( points.end(), noise.begin(), noise.end() );
+		const std::size_t min_pts = 6;
+		const double eps = 10.0;
+		const auto ref = brute_force_optics( points, min_pts, eps );
+		CHECK( optics::compute_reachability_dists( points, min_pts, eps ) == ref );
+	}
+}
 
+TEST_CASE("edge cases and degenerate inputs") {
+	using P2 = std::array<double, 2>;
+
+	// Empty input -> empty result.
+	CHECK( optics::compute_reachability_dists( std::vector<P2>{}, 5 ).empty() );
+
+	// min_pts must be >= 1.
+	std::vector<P2> two = { { 0, 0 }, { 1, 1 } };
+	CHECK_THROWS_AS( optics::compute_reachability_dists( two, 0 ), std::invalid_argument );
+
+	// Fewer points than min_pts: everything is unreached (core-distance UNDEFINED).
+	std::vector<P2> few = { { 0, 0 }, { 1, 0 }, { 0, 1 } };
+	const auto rd_few = optics::compute_reachability_dists( few, 10, 5.0 );
+	CHECK( rd_few.size() == 3 );
+	bool all_undefined = true;
+	for ( const auto& r : rd_few ) { if ( r.reach_dist >= 0.0 ) all_undefined = false; }
+	CHECK( all_undefined );
+
+	// All-identical points: auto-epsilon is 0, which still groups them into one cluster.
+	std::vector<P2> identical( 20, P2{ 3.0, 3.0 } );
+	const auto rd_id = optics::compute_reachability_dists( identical, 5 );
+	CHECK( rd_id.size() == 20 );
+	const auto cl_id = optics::get_cluster_indices( rd_id, 1.0 );
+	CHECK( cl_id.size() == 1 );
+	CHECK( cl_id[0].size() == 20 );
+
+	// Collinear (y constant): the effective-dimension epsilon estimate must still
+	// separate three groups along the x-axis (would fail with a 0/degenerate volume).
+	std::vector<P2> line;
+	for ( int g = 0; g < 3; ++g ) {
+		for ( int i = 0; i < 10; ++i ) { line.push_back( { g * 30.0 + i * 0.5, 0.0 } ); }
+	}
+	const auto rd_line = optics::compute_reachability_dists( line, 4 );  // auto epsilon, d_eff == 1
+	const auto cl_line = optics::get_cluster_indices( rd_line, 5.0 );
+	std::size_t big_line = 0;
+	for ( const auto& c : cl_line ) { if ( c.size() >= 5 ) ++big_line; }
+	CHECK( big_line == 3 );
+
+	// float vs double produce the same cluster structure.
+	const std::vector<P2> centers = { { 0, 0 }, { 40, 0 }, { 20, 35 } };
+	const auto pd = optics::testdata::gaussian_blobs<double, 2>( centers, 40, 1.5 );
+	const auto pf = optics::convert_cloud<float>( pd );
+	const auto large = []( const std::vector<std::vector<std::size_t>>& cs ) {
+		std::size_t k = 0;
+		for ( const auto& c : cs ) { if ( c.size() >= 20 ) ++k; }
+		return k;
+	};
+	const auto big_d = large( optics::cluster_dbscan( pd, 5, 12.0 ) );
+	const auto big_f = large( optics::cluster_dbscan( pf, 5, 12.0 ) );
+	CHECK( big_d == 3 );
+	CHECK( big_d == big_f );
+
+	// Determinism: identical results across repeated multi-threaded runs.
+	const auto r1 = optics::compute_reachability_dists( pd, 5, 12.0, optics::NeighborMode::Precompute, 8 );
+	const auto r2 = optics::compute_reachability_dists( pd, 5, 12.0, optics::NeighborMode::Precompute, 8 );
+	CHECK( r1 == r2 );
+}
+
+TEST_CASE("convenience: convert_cloud + cluster_dbscan + extract_xi") {
+	// Integer cloud (e.g. color-ish data) -> float, then a one-call DBSCAN cut.
+	std::vector<std::array<int, 2>> int_pts = {
+		{ 100,100 },{ 102,100 },{ 101,101 }, { 0,0 },{ 1,0 },{ 0,1 }, { -100,-100 },{ -102,-100 },{ -101,-101 } };
+	auto cloud = optics::convert_cloud<float>( int_pts );
+	auto clusters = optics::cluster_dbscan( cloud, 2, 10.0 );
+	CHECK( clusters.size() == 3 );
+
+	// Xi clusters as point-index lists from a cluster-ordering.
+	std::vector<optics::reachability_dist> reach_dists = {
+		{ 1,10.0 },{ 2,9.0 },{ 3,9.0 },{ 4,5.0 },{ 5,5.49 },{ 6,5.0 },
+		{ 7,6.5 },{ 8,3.0 },{ 9,2.9 },{ 10,2.8 },{ 11,10.0 },{ 12,12.0 } };
+	auto xi = optics::extract_xi( reach_dists, 0.1, 4 );
+	CHECK( xi.size() == 3 );
+}
 
 
 #ifdef OPTICS_ENABLE_BOOST_RTREE
 // Only built when the optional Boost backend is enabled. Verifies that the
 // Boost R*-tree backend returns the same neighbor sets as nanoflann, and that
 // it produces the same number of clusters end-to-end.
-void boost_backend_tests() {
+TEST_CASE("boost_backend_tests") {
 	static const int N = 2;
 	typedef std::array<double, N> point;
 	const std::vector<point> centers = { { 0, 0 }, { 60, 0 }, { 30, 50 } };
@@ -623,31 +741,15 @@ void boost_backend_tests() {
 		std::vector<std::size_t> a, b;
 		nano.radius_search( points[i], eps, a );
 		boost_be.radius_search( points[i], eps, b );
-		assert( sorted( a ) == sorted( b ) );
+		CHECK( sorted( a ) == sorted( b ) );
 	}
 
 	const auto reach_boost = optics::compute_reachability_dists<double, N, optics::BoostRTreeBackend<double, N>>( points, 10, 10.0 );
 	const auto clusters = optics::get_cluster_indices( reach_boost, 10.0 );
 	std::size_t large = 0;
 	for ( const auto& c : clusters ) { if ( c.size() >= 50 ) ++large; }
-	assert( large == 3 );
+	CHECK( large == 3 );
 
 	std::cout << "Boost backend equivalence tests successful!" << std::endl;
 }
 #endif
-
-
-int main()
-{
-	tree_tests();
-	epsilon_estimation_tests();
-	chi_cluster_tests();
-	chi_cluster_tree_tests();
-	clustering_tests();
-	neighbor_mode_tests();
-#ifdef OPTICS_ENABLE_BOOST_RTREE
-	boost_backend_tests();
-#endif
-
-	return 0;
-}

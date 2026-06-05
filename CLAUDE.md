@@ -25,8 +25,8 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-- **Run one suite:** `ctest --preset msvc -R optics_tests` (suites: `optics_tests`, `optics_visual_test`), or run the built exe directly (`build/test/Release/optics_tests.exe`).
-- **Tests use `assert()`** for verification. The test targets force assertions on via `/UNDEBUG` (MSVC) / `-UNDEBUG` (GCC/Clang) — never rely on `-DNDEBUG` builds passing meaningfully.
+- **Run one suite:** `ctest --preset msvc -R optics_tests` (suites: `optics_tests`, `optics_visual_test`), or run the built exe directly (`build/test/Release/optics_tests.exe`). Use `ctest --output-on-failure` to see doctest's per-case report.
+- **Unit suite uses [doctest](https://github.com/doctest/doctest)** (`test/third_party/doctest.h`, vendored, test-only): `optics_tests` is `TEST_CASE`/`CHECK`-based, so assertions run regardless of `NDEBUG`. Note: doctest can't decompose `&&`/`||` in a `CHECK` — wrap such expressions in parens. The separate `optics_visual_test` still verifies via `assert()`, so it keeps `/UNDEBUG` (MSVC) / `-UNDEBUG` (GCC/Clang).
 - **Optional Boost backend:** configure with `-DOPTICS_ENABLE_BOOST_RTREE=ON` (needs Boost.Geometry). This compiles `BoostRTreeBackend` and an `#ifdef`-gated equivalence test. Boost is exercised in CI (`.github/workflows/ci.yml`), not in the default build.
 - **Benchmark:** build the `optics_benchmark` target (Release) and run it; an optional integer arg scales the point counts (`optics_benchmark 4`). Not a ctest.
 - **Local toolchain note:** on the original dev machine only VS2022 is installed (no g++/standalone cmake on PATH); use its bundled cmake at `…\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe`.
