@@ -50,6 +50,10 @@ reachdists.bmp
 build
 dependencies
 
+# Python tooling
+__pycache__/
+*.pyc
+
 #Output
 *.ppm
 !*/Opencv_ClusterImage_Test/ClusterImage_*.ppm
