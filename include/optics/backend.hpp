@@ -68,10 +68,20 @@ struct PointCloudAdaptor {
 }  // namespace detail
 
 // Default backend: nanoflann single-index KD-tree (runtime-sized, fast, header-only).
-template <typename T, std::size_t Dim>
+//
+// ApproxEpsPermille selects nanoflann's eps-approximate search: a query prunes any
+// branch whose minimum distance exceeds worstDist / (1 + eps), visiting fewer nodes
+// at the cost of possibly missing points near the query boundary. 0 (the default)
+// is exact and bit-for-bit unchanged; the ApproxNanoflannBackend alias uses 100
+// (eps = 0.1) for the high-dimensional regime where exact NN dominates runtime.
+// eps = ApproxEpsPermille / 1000.
+template <typename T, std::size_t Dim, unsigned ApproxEpsPermille = 0>
 class NanoflannBackend {
 public:
     using Point = std::array<T, Dim>;
+
+    // nanoflann's eps-approximation factor for this backend (0 => exact).
+    static constexpr float search_eps = static_cast<float>(ApproxEpsPermille) / 1000.0f;
 
     explicit NanoflannBackend(const std::vector<Point>& points, std::size_t leaf_max_size = 16)
         : adaptor_(points),
@@ -88,6 +98,7 @@ public:
         matches.clear();
         nanoflann::SearchParameters params;
         params.sorted = false;
+        params.eps = search_eps;
         index_.radiusSearch(p.data(), radius_sq, matches, params);
         out.reserve(out.size() + matches.size());
         for (const auto& m : matches) out.push_back(m.first);
@@ -96,14 +107,20 @@ public:
     // Core-distance via a k-NN query: distance to the min_pts-th nearest point,
     // or nullopt if that neighbor lies beyond r (equivalently, fewer than min_pts
     // points lie within r -- the UNDEFINED core-distance case). O(min_pts log n)
-    // instead of scanning the whole eps-neighborhood. Matches the value of the
-    // nth_element scan exactly (same kth distance), so it does not change results.
+    // instead of scanning the whole eps-neighborhood. For an exact backend this
+    // matches the nth_element scan exactly (same kth distance).
     std::optional<double> knn_core_dist(const Point& p, std::size_t min_pts, T r) const {
         thread_local std::vector<std::size_t> idx;
         thread_local std::vector<T> dist_sq;
         idx.resize(min_pts);
         dist_sq.resize(min_pts);
-        const std::size_t found = index_.knnSearch(p.data(), min_pts, idx.data(), dist_sq.data());
+        // findNeighbors (not knnSearch) so the eps-approximation factor applies.
+        nanoflann::KNNResultSet<T, std::size_t> result_set(min_pts);
+        result_set.init(idx.data(), dist_sq.data());
+        nanoflann::SearchParameters params;
+        params.eps = search_eps;
+        index_.findNeighbors(result_set, p.data(), params);
+        const std::size_t found = result_set.size();
         if (found < min_pts) return std::nullopt;
         const T kth_sq = dist_sq[min_pts - 1];
         if (kth_sq > r * r) return std::nullopt;
@@ -118,6 +135,13 @@ private:
     Adaptor adaptor_;
     Index index_;
 };
+
+// Approximate nanoflann backend for the high-dimensional (e.g. 16-D) regime where
+// exact nearest-neighbor search dominates the runtime. Same KD-tree, eps-approximate
+// queries (default eps = 0.1): faster, with bounded recall loss near the query
+// boundary. Swap it in via the Backend template argument of compute_reachability_dists.
+template <typename T, std::size_t Dim, unsigned ApproxEpsPermille = 100>
+using ApproxNanoflannBackend = NanoflannBackend<T, Dim, ApproxEpsPermille>;
 
 }  // namespace optics
 
