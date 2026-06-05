@@ -44,7 +44,7 @@ void bench_core_dist( ankerl::nanobench::Bench& bench, const std::string& name, 
 	bench.batch( points.size() ).run( name, [&] {
 		double acc = 0.0;
 		for ( std::size_t i = 0; i < points.size(); ++i ) {
-			acc += optics::compute_core_dist( points[i], points, nbrs[i], min_pts ).value_or( 0.0 );
+			acc += optics::detail::compute_core_dist( points[i], points, nbrs[i], min_pts ).value_or( 0.0 );
 		}
 		ankerl::nanobench::doNotOptimizeAway( acc );
 	} );

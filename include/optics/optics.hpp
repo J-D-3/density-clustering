@@ -58,7 +58,9 @@ inline std::ostringstream& operator<<( std::ostringstream& stream, const reachab
 }
 
 
-//=== Core OPTICS primitives =================================================
+//=== Core OPTICS primitives (internal) ======================================
+
+namespace detail {
 
 // core-distance of a point: nullopt if it has fewer than min_pts neighbors
 // (incl. itself), else the distance to its min_pts-th nearest neighbor.
@@ -97,8 +99,12 @@ struct seed_min_heap_cmp {
 
 using seed_queue = std::priority_queue<reachability_dist, std::vector<reachability_dist>, seed_min_heap_cmp>;
 
+}  // namespace detail
+
 
 //=== Epsilon estimation =====================================================
+
+namespace detail {
 
 template <typename T, std::size_t dimension>
 std::pair<Point<T, dimension>, Point<T, dimension>> bounding_box( const std::vector<Point<T, dimension>>& points ) {
@@ -125,6 +131,8 @@ double hypercuboid_volume( const Point<T, dimension>& bl, const Point<T, dimensi
 	return volume;
 }
 
+}  // namespace detail
+
 // Heuristic generating distance: the expected MinPts-nearest-neighbor distance
 // assuming a uniform point distribution over the data's bounding box.
 template <typename T, std::size_t dimension>
@@ -134,8 +142,8 @@ double epsilon_estimation( const std::vector<Point<T, dimension>>& points, std::
 	if ( points.size() <= 1 ) { return 0.0; }
 
 	const double d = static_cast<double>( dimension );
-	const auto space = bounding_box( points );
-	const double space_volume = hypercuboid_volume( space.first, space.second );
+	const auto space = detail::bounding_box( points );
+	const double space_volume = detail::hypercuboid_volume( space.first, space.second );
 
 	const double space_per_minpts_points = ( space_volume / static_cast<double>( points.size() ) ) * static_cast<double>( min_pts );
 	const double n_dim_unit_ball_vol = std::sqrt( std::pow( detail::pi, d ) ) / std::tgamma( d / 2.0 + 1.0 );
@@ -193,7 +201,7 @@ std::vector<reachability_dist> compute_reachability_dists(
 	};
 
 	// Reused across points; drained to empty whenever an expansion finishes.
-	seed_queue seeds;
+	detail::seed_queue seeds;
 	const auto relax_neighbors = [&]( std::size_t idx, const std::vector<std::size_t>& nbrs, double core_dist ) {
 		for ( const std::size_t o : nbrs ) {
 			if ( processed[o] ) { continue; }
@@ -211,7 +219,7 @@ std::vector<reachability_dist> compute_reachability_dists(
 		ordered_list.push_back( point_idx );
 
 		const auto& neighbor_indices = neighbors_of( point_idx );
-		const auto core_dist = compute_core_dist( points[point_idx], points, neighbor_indices, min_pts );
+		const auto core_dist = detail::compute_core_dist( points[point_idx], points, neighbor_indices, min_pts );
 		if ( core_dist.has_value() ) { relax_neighbors( point_idx, neighbor_indices, *core_dist ); }
 
 		while ( !seeds.empty() ) {
@@ -223,7 +231,7 @@ std::vector<reachability_dist> compute_reachability_dists(
 			ordered_list.push_back( s.point_index );
 
 			const auto& s_neighbor_indices = neighbors_of( s.point_index );
-			const auto s_core_dist = compute_core_dist( points[s.point_index], points, s_neighbor_indices, min_pts );
+			const auto s_core_dist = detail::compute_core_dist( points[s.point_index], points, s_neighbor_indices, min_pts );
 			if ( s_core_dist.has_value() ) { relax_neighbors( s.point_index, s_neighbor_indices, *s_core_dist ); }
 		}
 	}
@@ -274,17 +282,21 @@ std::vector<std::vector<std::array<T, dimension>>> get_cluster_points(
 
 //=== Xi / steep-area cluster extraction =====================================
 
+namespace detail {
+// A steep-down area (start/end index + maximum-in-between value); internal to
+// the Xi extraction.
 struct SDA {
 	SDA( std::size_t begin_idx_, std::size_t end_idx_, double mib_ ) : begin_idx( begin_idx_ ), end_idx( end_idx_ ), mib( mib_ ) {}
 	std::size_t begin_idx;
 	std::size_t end_idx;
 	double mib;
 };
+}  // namespace detail
 
 
 inline std::vector<chi_cluster_indices> get_chi_clusters_flat( const std::vector<reachability_dist>& reach_dists_, const double chi, std::size_t min_pts, double steep_area_min_diff = 0.0 ) {
 	std::vector<std::pair<std::size_t, std::size_t>> clusters;
-	std::vector<SDA> SDAs;
+	std::vector<detail::SDA> SDAs;
 	const std::size_t n_reachdists = reach_dists_.size();
 	double mib( 0 );
 	double max_reach( 0.0 );
@@ -308,7 +320,7 @@ inline std::vector<chi_cluster_indices> get_chi_clusters_flat( const std::vector
 		return get_reach_dist( idx + 1 ) * ( 1 - chi ) >= get_reach_dist( idx );
 	};
 	const auto filter_sdas = [&chi, &steep_area_min_diff, &SDAs, &mib, &get_reach_dist]() {
-		std::erase_if( SDAs, [&mib, &chi, &steep_area_min_diff, &get_reach_dist]( const SDA& sda ) -> bool {
+		std::erase_if( SDAs, [&mib, &chi, &steep_area_min_diff, &get_reach_dist]( const detail::SDA& sda ) -> bool {
 			const double f = std::max( chi, steep_area_min_diff );
 			return !( mib <= get_reach_dist( sda.begin_idx ) * ( 1 - f ) );
 		} );
@@ -340,7 +352,7 @@ inline std::vector<chi_cluster_indices> get_chi_clusters_flat( const std::vector
 		}
 		return std::max( n_reachdists - 2, last_su_idx );
 	};
-	const auto cluster_borders = [&get_reach_dist, &n_reachdists, &chi]( const SDA& sda, std::size_t sua_begin_idx, std::size_t sua_end_idx ) -> std::pair<std::size_t, std::size_t> {
+	const auto cluster_borders = [&get_reach_dist, &n_reachdists, &chi]( const detail::SDA& sda, std::size_t sua_begin_idx, std::size_t sua_end_idx ) -> std::pair<std::size_t, std::size_t> {
 		double start_reach = get_reach_dist( sda.begin_idx );
 		double end_reach = get_reach_dist( std::min( sua_end_idx + 1, n_reachdists - 1 ) );
 		if ( detail::in_range( start_reach, end_reach, start_reach * chi ) ) {
@@ -363,7 +375,7 @@ inline std::vector<chi_cluster_indices> get_chi_clusters_flat( const std::vector
 		assert( false );
 		return { 0, 0 };
 	};
-	const auto valid_combination = [&chi, &steep_area_min_diff, &min_pts, &get_reach_dist]( const SDA& sda, std::size_t sua_begin_idx, std::size_t sua_end_idx ) -> bool {
+	const auto valid_combination = [&chi, &steep_area_min_diff, &min_pts, &get_reach_dist]( const detail::SDA& sda, std::size_t sua_begin_idx, std::size_t sua_end_idx ) -> bool {
 		const double f = std::max( chi, steep_area_min_diff );
 		if ( sda.mib > get_reach_dist( sua_end_idx + 1 ) * ( 1 - f ) ) { return false; }
 
@@ -387,7 +399,7 @@ inline std::vector<chi_cluster_indices> get_chi_clusters_flat( const std::vector
 			if ( reach_i * ( 1.0 - steep_area_min_diff ) < get_reach_dist( sda_end_idx + 1 ) ) {
 				continue;
 			}
-			SDAs.push_back( SDA( idx, sda_end_idx, 0.0 ) );
+			SDAs.push_back( detail::SDA( idx, sda_end_idx, 0.0 ) );
 			idx = sda_end_idx;
 			if ( idx < n_reachdists - 1 ) { mib = get_reach_dist( idx + 1 ); }
 			continue;
