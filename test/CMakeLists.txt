@@ -26,3 +26,9 @@ target_link_libraries(optics_benchmark PRIVATE optics::optics)
 target_compile_options(optics_benchmark PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>:/W4>
     $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra>)
+
+# Performance-regression harness (nanobench). Release config; emits optics_perf.csv.
+# Not a ctest (timings vary by machine).
+add_executable(optics_perf Benchmark/perf.cpp)
+target_link_libraries(optics_perf PRIVATE optics::optics)
+target_include_directories(optics_perf SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party")

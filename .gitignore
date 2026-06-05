@@ -54,6 +54,10 @@ dependencies
 __pycache__/
 *.pyc
 
+# Transient perf output (the committed reference is perf/baseline.csv)
+/optics_perf.csv
+optics_perf.csv
+
 #Output
 *.ppm
 !*/Opencv_ClusterImage_Test/ClusterImage_*.ppm
