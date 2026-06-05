@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  build-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux GCC
+            os: ubuntu-latest
+            preset: linux-gcc
+          - name: Linux Clang
+            os: ubuntu-latest
+            preset: linux-clang
+          - name: Windows MSVC
+            os: windows-latest
+            preset: msvc
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+  build-test-boost:
+    name: Linux GCC + Boost backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Boost
+        run: sudo apt-get update && sudo apt-get install -y libboost-dev
+
+      - name: Configure (Boost backend enabled)
+        run: cmake --preset linux-gcc -DOPTICS_ENABLE_BOOST_RTREE=ON
+
+      - name: Build
+        run: cmake --build --preset linux-gcc
+
+      - name: Test
+        run: ctest --preset linux-gcc
