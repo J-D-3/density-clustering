@@ -13,10 +13,20 @@ cmake --build build --config Release --target optics_perf
 
 ## `baseline.csv`
 
-Committed reference, captured **before** task #12 (`compute_core_dist` optimization).
+Committed reference for the current line of development (refreshed for v0.9.1).
 
 - Machine: 22-thread desktop (Windows, MSVC 19.44, Release).
 - Headline metric for #12: **`core_dist 3D double (30k)`** (per-call ns, `elapsed` column ÷ batch).
+
+### v0.9.1 scenarios
+
+- **`dense 3D 30k core-dist {scan,knn}`** — a few very dense blobs (flat-color-like), so
+  each point's eps-neighborhood is huge. The Knn core-distance (issue #24) avoids scanning
+  the neighborhood and is markedly faster here (~5.9 s → ~4.3 s, ≈27% on this machine); the
+  gap widens as neighborhoods grow.
+- **`backend 16D 8k nanoflann {exact,approx}`** (plus `boost rtree` when built with
+  `-DOPTICS_ENABLE_BOOST_RTREE=ON`) — the same 16-D cloud across backends, comparing the
+  exact KD-tree, the eps-approximate backend (issue #28), and Boost's R*-tree.
 
 ## How to compare (important)
 

@@ -1,9 +1,13 @@
 "title";"name";"unit";"batch";"elapsed";"error %";"instructions";"branches";"branch misses";"total"
-"OPTICS perf (hw=22)";"core_dist 3D double (30k)";"op";30000;0.008246625;0.00932570538666851;0;0;0;0.977403
-"OPTICS perf (hw=22)";"core_dist 3D float  (30k)";"op";30000;0.00850875833333333;0.0216928065723631;0;0;0;1.0364392
-"OPTICS perf (hw=22)";"core_dist 16D double (8k)";"op";8000;3.85392857142857e-05;0.0614261628218166;0;0;0;0.012375
-"OPTICS perf (hw=22)";"ordering 3D double 30k precompute x1";"op";1;0.129211566666667;0.0339616390825985;0;0;0;4.7378467
-"OPTICS perf (hw=22)";"ordering 3D double 30k precompute xHW";"op";1;0.0714524333333333;0.0618996830014152;0;0;0;3.0279888
-"OPTICS perf (hw=22)";"ordering 3D double 30k ondemand x1";"op";1;0.0975381666666667;0.0360874094353638;0;0;0;3.3894675
-"OPTICS perf (hw=22)";"ordering 3D float 30k precompute xHW";"op";1;0.0689805;0.0135712808036281;0;0;0;2.3501595
-"OPTICS perf (hw=22)";"ordering 16D double 8k precompute xHW";"op";1;0.111943566666667;0.0755331577428996;0;0;0;3.7781464
+"OPTICS perf (hw=22)";"core_dist 3D double (30k)";"op";30000;0.00869425454545454;0.0497898483988631;0;0;0;1.1114142
+"OPTICS perf (hw=22)";"core_dist 3D float  (30k)";"op";30000;0.00902654545454546;0.0286821890584899;0;0;0;1.1183565
+"OPTICS perf (hw=22)";"core_dist 16D double (8k)";"op";8000;3.31875e-05;0.00491518889745559;0;0;0;0.0118221
+"OPTICS perf (hw=22)";"ordering 3D double 30k precompute x1";"op";1;0.136065366666667;0.0374236381017869;0;0;0;4.7344043
+"OPTICS perf (hw=22)";"ordering 3D double 30k precompute xHW";"op";1;0.0876642666666667;0.0270329463802784;0;0;0;2.9507509
+"OPTICS perf (hw=22)";"ordering 3D double 30k ondemand x1";"op";1;0.115959766666667;0.0243968582531711;0;0;0;4.0072484
+"OPTICS perf (hw=22)";"ordering 3D float 30k precompute xHW";"op";1;0.0802674;0.0348119951147695;0;0;0;2.8513609
+"OPTICS perf (hw=22)";"ordering 16D double 8k precompute xHW";"op";1;0.148694033333333;0.018259557722979;0;0;0;5.1095491
+"OPTICS perf (hw=22)";"dense 3D 30k core-dist scan";"op";1;5.8578075;0.00913217272062504;0;0;0;197.2977216
+"OPTICS perf (hw=22)";"dense 3D 30k core-dist knn";"op";1;4.26958113333333;0.0249711467522735;0;0;0;146.2981528
+"OPTICS perf (hw=22)";"backend 16D 8k nanoflann exact";"op";1;0.1488384;0.0436924699450467;0;0;0;5.1037536
+"OPTICS perf (hw=22)";"backend 16D 8k nanoflann approx";"op";1;0.1462383;0.0264857016753774;0;0;0;4.9235777
