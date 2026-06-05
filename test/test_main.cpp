@@ -649,6 +649,64 @@ TEST_CASE("reference: library matches brute-force O(n^2) OPTICS") {
 	}
 }
 
+TEST_CASE("edge cases and degenerate inputs") {
+	using P2 = std::array<double, 2>;
+
+	// Empty input -> empty result.
+	CHECK( optics::compute_reachability_dists( std::vector<P2>{}, 5 ).empty() );
+
+	// min_pts must be >= 1.
+	std::vector<P2> two = { { 0, 0 }, { 1, 1 } };
+	CHECK_THROWS_AS( optics::compute_reachability_dists( two, 0 ), std::invalid_argument );
+
+	// Fewer points than min_pts: everything is unreached (core-distance UNDEFINED).
+	std::vector<P2> few = { { 0, 0 }, { 1, 0 }, { 0, 1 } };
+	const auto rd_few = optics::compute_reachability_dists( few, 10, 5.0 );
+	CHECK( rd_few.size() == 3 );
+	bool all_undefined = true;
+	for ( const auto& r : rd_few ) { if ( r.reach_dist >= 0.0 ) all_undefined = false; }
+	CHECK( all_undefined );
+
+	// All-identical points: auto-epsilon is 0, which still groups them into one cluster.
+	std::vector<P2> identical( 20, P2{ 3.0, 3.0 } );
+	const auto rd_id = optics::compute_reachability_dists( identical, 5 );
+	CHECK( rd_id.size() == 20 );
+	const auto cl_id = optics::get_cluster_indices( rd_id, 1.0 );
+	CHECK( cl_id.size() == 1 );
+	CHECK( cl_id[0].size() == 20 );
+
+	// Collinear (y constant): the effective-dimension epsilon estimate must still
+	// separate three groups along the x-axis (would fail with a 0/degenerate volume).
+	std::vector<P2> line;
+	for ( int g = 0; g < 3; ++g ) {
+		for ( int i = 0; i < 10; ++i ) { line.push_back( { g * 30.0 + i * 0.5, 0.0 } ); }
+	}
+	const auto rd_line = optics::compute_reachability_dists( line, 4 );  // auto epsilon, d_eff == 1
+	const auto cl_line = optics::get_cluster_indices( rd_line, 5.0 );
+	std::size_t big_line = 0;
+	for ( const auto& c : cl_line ) { if ( c.size() >= 5 ) ++big_line; }
+	CHECK( big_line == 3 );
+
+	// float vs double produce the same cluster structure.
+	const std::vector<P2> centers = { { 0, 0 }, { 40, 0 }, { 20, 35 } };
+	const auto pd = optics::testdata::gaussian_blobs<double, 2>( centers, 40, 1.5 );
+	const auto pf = optics::convert_cloud<float>( pd );
+	const auto large = []( const std::vector<std::vector<std::size_t>>& cs ) {
+		std::size_t k = 0;
+		for ( const auto& c : cs ) { if ( c.size() >= 20 ) ++k; }
+		return k;
+	};
+	const auto big_d = large( optics::cluster_dbscan( pd, 5, 12.0 ) );
+	const auto big_f = large( optics::cluster_dbscan( pf, 5, 12.0 ) );
+	CHECK( big_d == 3 );
+	CHECK( big_d == big_f );
+
+	// Determinism: identical results across repeated multi-threaded runs.
+	const auto r1 = optics::compute_reachability_dists( pd, 5, 12.0, optics::NeighborMode::Precompute, 8 );
+	const auto r2 = optics::compute_reachability_dists( pd, 5, 12.0, optics::NeighborMode::Precompute, 8 );
+	CHECK( r1 == r2 );
+}
+
 TEST_CASE("convenience: convert_cloud + cluster_dbscan + extract_xi") {
 	// Integer cloud (e.g. color-ish data) -> float, then a one-call DBSCAN cut.
 	std::vector<std::array<int, 2>> int_pts = {

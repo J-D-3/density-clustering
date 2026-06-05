@@ -141,11 +141,25 @@ double epsilon_estimation( const std::vector<Point<T, dimension>>& points, std::
 	static_assert( dimension >= 1, "epsilon_estimation: dimension must be >= 1" );
 	if ( points.size() <= 1 ) { return 0.0; }
 
-	const double d = static_cast<double>( dimension );
 	const auto space = detail::bounding_box( points );
-	const double space_volume = detail::hypercuboid_volume( space.first, space.second );
+	// Use only dimensions with non-zero extent, so degenerate inputs (collinear,
+	// planar, or all-identical) yield a sensible scale instead of a zero volume.
+	double effective_volume = 1.0;
+	std::size_t d_eff = 0;
+	for ( std::size_t i = 0; i < dimension; ++i ) {
+		const double extent = std::abs( static_cast<double>( space.second[i] - space.first[i] ) );
+		if ( extent > 0.0 ) {
+			effective_volume *= extent;
+			++d_eff;
+		}
+	}
+	// d_eff == 0 means every coordinate is identical across all points: there is no
+	// spatial scale, every pairwise distance is 0, and any positive radius groups
+	// them identically, so the concrete value is immaterial.
+	if ( d_eff == 0 ) { return 1.0; }
 
-	const double space_per_minpts_points = ( space_volume / static_cast<double>( points.size() ) ) * static_cast<double>( min_pts );
+	const double d = static_cast<double>( d_eff );
+	const double space_per_minpts_points = ( effective_volume / static_cast<double>( points.size() ) ) * static_cast<double>( min_pts );
 	const double n_dim_unit_ball_vol = std::sqrt( std::pow( detail::pi, d ) ) / std::tgamma( d / 2.0 + 1.0 );
 	return std::pow( space_per_minpts_points / n_dim_unit_ball_vol, 1.0 / d );
 }
@@ -173,7 +187,9 @@ std::vector<reachability_dist> compute_reachability_dists(
 
 	double eps = epsilon;
 	if ( eps <= 0.0 ) { eps = epsilon_estimation( points, min_pts ); }
-	if ( eps <= 0.0 ) { eps = 1.0; }  // degenerate input (all points identical): any positive radius works
+	// epsilon_estimation returns a positive scale for any input with >= 2 points,
+	// using only the non-degenerate dimensions (so collinear/planar/identical
+	// inputs no longer collapse to a zero radius).
 	const T eps_t = static_cast<T>( eps );
 
 	const Backend backend( points );

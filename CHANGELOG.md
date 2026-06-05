@@ -45,3 +45,6 @@ First modernized release: a fast, dependency-free, cross-platform C++20 library.
 ### Fixed
 - nanoflann's L2 metric works in squared distance; the backend now squares the search
   radius (the old nanoflann path searched an unsquared radius).
+- `epsilon_estimation` uses only the non-degenerate dimensions, so collinear/planar inputs
+  get a sensible auto-epsilon instead of collapsing to a magic `1.0` fallback (which now
+  applies only to truly all-identical points, where the value is immaterial).
