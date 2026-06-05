@@ -82,12 +82,17 @@ stays for ad-hoc large-scale (1e6–1e7) exploration (#16).
 9. **#20 Convenience entry points + byte/int ergonomics** — `extract_dbscan`/`extract_xi`
    wrappers, a one-call cluster→labels helper, and a documented conversion path for `uint8`
    color data (since `T` must be float/double).
+10. **#26 License compliance** — nanoflann is **BSD-2-Clause** (its header is preserved in
+    `nanoflann.hpp`, satisfying source redistribution); our own license **stays MIT**. Add a
+    `THIRD-PARTY-LICENSES` file enumerating nanoflann (BSD-2-Clause) plus the test-only deps
+    doctest + nanobench (MIT), and reference it from `README`/`LICENSE`. This also covers the
+    BSD binary-distribution attribution clause for downstream consumers.
 
 ## Tier 2 — Correctness & confidence (written in doctest)
 
-10. **#21 Brute-force O(n²) reference test** — assert the pipeline matches a naive OPTICS on
+11. **#21 Brute-force O(n²) reference test** — assert the pipeline matches a naive OPTICS on
     small clouds (the `chi_*` tests only pin current behavior, not paper-correctness).
-11. **#22 Edge-case handling + tests** — `< min_pts` points, all-identical points (replace the
+12. **#22 Edge-case handling + tests** — `< min_pts` points, all-identical points (replace the
     `eps = 1.0` fallback hack), duplicates, empty input, NaN/inf; plus float-vs-double parity
     and seed tie-break determinism.
 
@@ -116,5 +121,6 @@ Release:      verify checklist → tag v0.9.0
 - [ ] doctest suite + Boost-backend test green on MSVC, GCC, Clang.
 - [ ] Perf baseline shows net improvement; no regressions beyond tolerance.
 - [ ] `find_package(optics)` works from a throwaway consumer project.
+- [ ] `THIRD-PARTY-LICENSES` present (nanoflann BSD-2-Clause + test-only MIT deps); README references it.
 - [ ] Edge-case tests pass; no `eps = 1.0` hack remaining.
 - [ ] `CHANGELOG.md` updated; version bumped; tag `v0.9.0`.
