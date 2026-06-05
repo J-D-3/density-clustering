@@ -5,8 +5,19 @@
 
 
 #include "../include/optics/optics.hpp"
+
+#include <algorithm>
+#include <array>
+#include <iostream>
 #include <vector>
 
+
+// Returns a sorted copy of a container (replaces the former fplus::sort usage).
+template <class C>
+C sorted( C c ) {
+	std::sort( c.begin(), c.end() );
+	return c;
+}
 
 
 void clustering_test_1(){
@@ -18,47 +29,44 @@ void clustering_test_1(){
 			   {-1,0}, {1,0}, {0,1},                     //cluster 2
 			   {-100,-100}, {-102,-100}, {-101,-101}     //cluster 3
 	};
-	auto reach_dists = optics::compute_reachability_dists<9>( points, 2, 10 );
+	auto reach_dists = optics::compute_reachability_dists( points, 2, 10 );
 	/*for( const auto& x : reach_dists){
 		std::cout << x.to_string() << "; ";
 	}*/
 
 	auto clusters = optics::get_cluster_indices(reach_dists, 10);
 	assert(clusters.size() == 3);
-	assert( ( fplus::sort( clusters[0] ) == std::vector <std::size_t>({ 0,1,2 }) ) );
-	assert( ( fplus::sort( clusters[1] ) == std::vector <std::size_t>({ 3,4,5 }) ) );
-	assert( ( fplus::sort( clusters[2] ) == std::vector <std::size_t>({ 6,7,8 }) ) );
+	assert( ( sorted( clusters[0] ) == std::vector <std::size_t>({ 0,1,2 }) ) );
+	assert( ( sorted( clusters[1] ) == std::vector <std::size_t>({ 3,4,5 }) ) );
+	assert( ( sorted( clusters[2] ) == std::vector <std::size_t>({ 6,7,8 }) ) );
 }
 
 
 void clustering_test_2() {
 	static const int N = 2;
-	typedef std::array<int, N> point; //A list of N cartesian coordinates makes a point
+	typedef std::array<double, N> point; //A list of N cartesian coordinates makes a point
 
 	std::vector<point> points; //Your list of points goes here
 	points = { { 100,100 },{ 102,100 },{ 101,101 },           //cluster 1
 	{ -1,0 },{ 1,0 },{ 0,1 },                     //cluster 2
 	{ -100,-100 },{ -102,-100 },{ -101,-101 }     //cluster 3
 	};
-	auto reach_dists = optics::compute_reachability_dists<9>( points, 2 );
+	auto reach_dists = optics::compute_reachability_dists( points, 2 );
 	/*for ( const auto& x : reach_dists ) {
 		std::cout << x.to_string() << "; ";
 	}*/
 
 	auto clusters = optics::get_cluster_indices( reach_dists, 2 );
 	assert( clusters.size() == 3 );
-	assert( (fplus::sort( clusters[0] ) == std::vector <std::size_t>( { 0,1,2 } )) );
-	assert( (fplus::sort( clusters[1] ) == std::vector <std::size_t>( { 3,4,5 } )) );
-	assert( (fplus::sort( clusters[2] ) == std::vector <std::size_t>( { 6,7,8 } )) );
-
-	auto img = optics::draw_reachability_plot( reach_dists );
-	img.save( "ReachabilityPlot" );
+	assert( (sorted( clusters[0] ) == std::vector <std::size_t>( { 0,1,2 } )) );
+	assert( (sorted( clusters[1] ) == std::vector <std::size_t>( { 3,4,5 } )) );
+	assert( (sorted( clusters[2] ) == std::vector <std::size_t>( { 6,7,8 } )) );
 }
 
 
 void clustering_test_3(){
 	static const int N = 2;
-	typedef std::array<int, N> point; //A list of N cartesian coordinates makes a point
+	typedef std::array<double, N> point; //A list of N cartesian coordinates makes a point
 
 	std::vector<point> points; //Your list of points goes here
 	points = { {100,100}, {102,100}, {101,101},           //cluster 1
@@ -66,17 +74,16 @@ void clustering_test_3(){
 			   {50,40}, {52,40}, {51,41}     //cluster 3
 	};
 
-	auto reach_dists = optics::compute_reachability_dists<9>( points, 2, 10 );
+	auto reach_dists = optics::compute_reachability_dists( points, 2, 10 );
 
 	auto clusters = optics::get_cluster_indices( reach_dists, 10 );
 	assert( clusters.size() == 3 );
-	assert( (fplus::sort( clusters[0] ) == std::vector <std::size_t>( { 0,1,2 } )) );
-	assert( (fplus::sort( clusters[1] ) == std::vector <std::size_t>( { 3,4,5 } )) );
-	assert( (fplus::sort( clusters[2] ) == std::vector <std::size_t>( { 6,7,8 } )) );
+	assert( (sorted( clusters[0] ) == std::vector <std::size_t>( { 0,1,2 } )) );
+	assert( (sorted( clusters[1] ) == std::vector <std::size_t>( { 3,4,5 } )) );
+	assert( (sorted( clusters[2] ) == std::vector <std::size_t>( { 6,7,8 } )) );
 
 	auto cluster_points = optics::get_cluster_points(reach_dists, 10, points);
-	auto img = optics::draw_2d_clusters(cluster_points);
-	img.save("Clusters2d");
+	assert( cluster_points.size() == 3 );
 }
 
 
@@ -120,8 +127,6 @@ void chi_test_1(){
 	std::size_t min_pts = 4;
    auto clusters = optics::get_chi_clusters_flat( reach_dists, chi, min_pts );
    std::vector<std::pair<std::size_t, std::size_t>> exp ({ {2, 5}, {0, 11}, { 6,10 } });
-   std::string clusters_str = fplus::show(clusters);
-   std::string res_str = fplus::show(exp);
    assert( clusters == exp );
 }
 void chi_test_2() {
@@ -397,9 +402,6 @@ void chi_test_11(){
 	   double steep_area_min_diff = 0.15;
 	   std::size_t min_pts = 5;
 
-	   auto img = optics::draw_reachability_plot_with_chi_clusters( reach_dists, chi, min_pts, steep_area_min_diff );
-	   img.save( "Chi_Test_11_ReachabilityPlot_1" );
-
 	   auto clusters = optics::get_chi_clusters_flat( reach_dists, chi, min_pts, steep_area_min_diff );
 	   std::vector<std::pair<std::size_t, std::size_t>> expected_result =
 	   { { 155, 162 },{ 203, 225 },{ 295, 299 },{ 300, 304 },{ 271, 358 },{ 270, 372 },{ 150, 407 },{ 422, 493 },{ 590, 607 },{ 626, 642 },{ 412, 684 },{ 700, 711 } };
@@ -410,9 +412,6 @@ void chi_test_11(){
 	   double chi = 0.1;
 	   double steep_area_min_diff = 0.02;
 	   std::size_t min_pts = 8;
-
-	   auto img = optics::draw_reachability_plot_with_chi_clusters( reach_dists, chi, min_pts, steep_area_min_diff );
-	   img.save( "Chi_Test_11_ReachabilityPlot_2" );
 
 	   auto clusters2 = optics::get_chi_clusters_flat( reach_dists, chi, min_pts, steep_area_min_diff );
 	   std::vector<std::pair<std::size_t, std::size_t>> expected_result =
@@ -489,9 +488,12 @@ bool trees_are_equal( const optics::Node<optics::chi_cluster_indices>& t1, const
 	if ( t1.get_children().size() == 0 && t2.get_children().size() == 0 && t1.get_data() == t2.get_data() ) {
 		return true;
 	}
-	return fplus::all(
-		fplus::zip_with( trees_are_equal, t1.get_children(), t2.get_children() )
-	);
+	const auto& c1 = t1.get_children();
+	const auto& c2 = t2.get_children();
+	for ( std::size_t i = 0; i < c1.size(); ++i ) {
+		if ( !trees_are_equal( c1[i], c2[i] ) ) { return false; }
+	}
+	return true;
 }
 
 void chi_cluster_tree_tests_1() {
@@ -567,161 +569,15 @@ void chi_cluster_tree_tests() {
 }
 
 
-void plot_tests() {
-	std::vector<optics::reachability_dist> reach_dists = {
-		{ 1,10.0 },{ 2,9.0 },{ 3,9.0 },{ 4, 5.0 },//SDA
-		{ 5,5.49 },{ 6,5.0 },//Cluster1
-		{ 7, 6.5 },//SUA
-		{ 8,3.0 },//SDA
-		{ 9, 2.9 },{ 10, 2.8 },//Cluster2
-		{ 11, 10.0 },{ 12, 12.0 }//SUA
-	};
-	double chi = 0.1;
-	std::size_t min_pts = 4;
-	auto img = optics::draw_reachability_plot_with_chi_clusters( reach_dists, chi, min_pts );
-	img.save( "./chi_cluster_img" );
-
-	std::cout << "Plotting tests successful!" << std::endl;
-}
-
-
-void kdtree_tests() {
-	{
-		typedef double T;
-		constexpr std::size_t dim = 1;
-		constexpr std::size_t n_pts = 8;
-		constexpr std::size_t max_pts = 2;
-
-		typedef std::array<T, dim> pt_t;
-		typedef std::vector<pt_t> pointcloud_t;
-
-		pointcloud_t points =
-		{ {
-			{{-4.0}}, {{-3.0}}, {{ -2.0 }}, {{ -1.0 }},
-			{{ 1.0 }}, {{ 2.0 }}, {{ 3.0 }}, {{ 4.0 }}
-		} }; //Two curly braces per array. Because. https://stackoverflow.com/questions/8192185/using-stdarray-with-initialization-lists
-
-		auto kd_tree = kdt::make_KDTree<T, dim, n_pts, max_pts>( points );
-
-		auto neighbors = kd_tree->radius_search( { -4 }, 1.01 );
-		std::vector<std::size_t> exp_neighbors{ 0, 1 };
-		assert( fplus::sort(neighbors) == exp_neighbors );
-
-		neighbors = kd_tree->radius_search( { -3 }, 1.01 );
-		exp_neighbors = { 0, 1, 2 };
-		assert( fplus::sort(neighbors) == exp_neighbors );
-
-		neighbors = kd_tree->radius_search( { -2 }, 1.01 );
-		exp_neighbors = { 1, 2, 3 };
-		assert( fplus::sort(neighbors) == exp_neighbors );
-
-		neighbors = kd_tree->radius_search( { -1 }, 1.01 );
-		exp_neighbors = { 2, 3 };
-		assert( fplus::sort(neighbors) == exp_neighbors );
-
-		neighbors = kd_tree->radius_search( { 1 }, 1.01 );
-		exp_neighbors = { 4, 5 };
-		assert( fplus::sort(neighbors) == exp_neighbors );
-
-		neighbors = kd_tree->radius_search( { 2 }, 1.01 );
-		exp_neighbors = { 4, 5, 6 };
-		assert( fplus::sort(neighbors) == exp_neighbors );
-
-		neighbors = kd_tree->radius_search( { 3 }, 1.01 );
-		exp_neighbors = { 5, 6, 7 };
-		assert( fplus::sort(neighbors) == exp_neighbors );
-
-		neighbors = kd_tree->radius_search( { 4 }, 1.01 );
-		exp_neighbors = { 6, 7 };
-		assert( fplus::sort(neighbors) == exp_neighbors );
-	}
-
-	{
-		typedef double T;
-		constexpr std::size_t dim = 1;
-		constexpr std::size_t n_pts = 4;
-		constexpr std::size_t max_pts = 2;
-
-		typedef std::array<T, dim> pt_t;
-		typedef std::vector<pt_t> pointcloud_t;
-
-		pointcloud_t points =
-		{ {
-			{ { -1 } },{ { 0 } },{ { 0 } },{ { 0 } }
-			} }; //Two curly braces per array. Because. https://stackoverflow.com/questions/8192185/using-stdarray-with-initialization-lists
-
-		auto kd_tree = kdt::make_KDTree<T, dim, n_pts, max_pts>( points );
-
-		auto neighbors = kd_tree->radius_search( { 0 }, 1.01 );
-		std::vector<std::size_t> exp_neighbors { { 0, 1, 2, 3 } };
-		assert( fplus::sort(neighbors) == exp_neighbors );
-	}
-
-	{
-		typedef double T;
-		constexpr std::size_t dim = 2;
-		constexpr std::size_t n_pts = 8;
-		constexpr std::size_t max_pts = 2;
-
-		typedef std::array<T, dim> pt_t;
-		typedef std::vector<pt_t> pointcloud_t;
-
-		pointcloud_t points =
-		{ {
-			{ { 0, 10 } }, { { 0, 9 } },{ { 0,8 } },
-			{ { 2, 6 } }, { { 2, 5 }},{ { 2, 4 } },
-			{ { 4, 2 } },{ { 4, 1 } }
-			} }; //Two curly braces per array. Because. https://stackoverflow.com/questions/8192185/using-stdarray-with-initialization-lists
-
-		auto kd_tree = kdt::make_KDTree<T, dim, n_pts, max_pts>( points );
-
-		auto neighbors = kd_tree->radius_search( { 0, 10 }, 1.01 );
-		std::vector<std::size_t> exp_neighbors
-		{0, 1};
-		assert( fplus::sort(neighbors) == exp_neighbors );
-
-		neighbors = kd_tree->radius_search( { 0, 9 }, 1.01 );
-		exp_neighbors = {0, 1, 2};
-		assert( fplus::sort(neighbors) == exp_neighbors );
-
-		neighbors = kd_tree->radius_search( { 0, 8 }, 1.01 );
-		exp_neighbors = {1, 2};
-		assert( fplus::sort(neighbors) == exp_neighbors );
-
-		neighbors = kd_tree->radius_search( { 2, 6 }, 1.01 );
-		exp_neighbors = {3, 4};
-		assert( fplus::sort(neighbors) == exp_neighbors );
-
-		neighbors = kd_tree->radius_search( { 2, 5 }, 1.01 );
-		exp_neighbors =	{3, 4, 5};
-		assert( fplus::sort(neighbors) == exp_neighbors );
-
-		neighbors = kd_tree->radius_search( { 2, 4 }, 1.01 );
-		exp_neighbors = {4, 5};
-		assert( fplus::sort(neighbors) == exp_neighbors );
-
-		neighbors = kd_tree->radius_search( { 4, 2 }, 1.01 );
-		exp_neighbors = {6, 7};
-		assert( fplus::sort(neighbors) == exp_neighbors );
-
-		neighbors = kd_tree->radius_search( { 4, 1 }, 1.01 );
-		exp_neighbors =	{6, 7};
-		assert( fplus::sort(neighbors) == exp_neighbors );
-	}
-
-	std::cout << "KDTree tests successful!" << std::endl;
-}
 
 
 int main()
 {
 	tree_tests();
-	kdtree_tests();
 	epsilon_estimation_tests();
 	chi_cluster_tests();
 	chi_cluster_tree_tests();
 	clustering_tests();
-	plot_tests();
 
 	return 0;
 }

@@ -1,22 +1,28 @@
-message(STATUS "CMake started")
+cmake_minimum_required(VERSION 3.20)
 
-cmake_minimum_required(VERSION 3.2)
+project(OPTICS-Clustering LANGUAGES CXX)
 
-project(OPTICS-Clustering)
+# Optional Boost.Geometry rtree neighbor-search backend. OFF by default so the
+# library builds with no external dependencies (only the vendored nanoflann).
+option(OPTICS_ENABLE_BOOST_RTREE "Enable the optional Boost rtree backend" OFF)
+option(OPTICS_BUILD_TESTS "Build the OPTICS test suite" ON)
 
+find_package(Threads REQUIRED)
 
-set(DEBUG_FLAGS "-g -O1 -pthread -pedantic")
-set(RELEASE_FLAGS "-O3 -pthread -pedantic")
+# Header-only library, consumed as an INTERFACE target.
+add_library(optics INTERFACE)
+add_library(optics::optics ALIAS optics)
+target_include_directories(optics INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_compile_features(optics INTERFACE cxx_std_20)
+target_link_libraries(optics INTERFACE Threads::Threads)
 
-set(CMAKE_CXX_STANDARD 14)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
+if(OPTICS_ENABLE_BOOST_RTREE)
+    find_package(Boost REQUIRED)
+    target_link_libraries(optics INTERFACE Boost::boost)
+    target_compile_definitions(optics INTERFACE OPTICS_ENABLE_BOOST_RTREE)
+endif()
 
-set(CMAKE_CXX_FLAGS ${RELEASE_FLAGS})
-set(CMAKE_CXX_FLAGS_DEBUG ${DEBUG_FLAGS})
-set(CMAKE_CONFIGURATION_TYPES Debug Release)
-set(EXECUTABLE_OUTPUT_PATH ${CMAKE_CURRENT_BINARY_DIR})
-
-enable_testing()
-
-add_subdirectory(test)
+if(OPTICS_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(test)
+endif()
