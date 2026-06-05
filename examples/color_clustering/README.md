@@ -31,13 +31,24 @@ Python deps for the driver: `pillow`, `numpy`, `matplotlib`.
 ```sh
 python examples/color_clustering/cluster_image.py <image> \
     --exe build/examples/Release/optics_color.exe \
-    --max-dim 360 --min-pts 25 --eps -1 --threshold 30 --frac 0.01 \
-    --out clusters.png
-# add --rgb to color the scatter by each point's true color instead of by cluster
+    --max-dim 360 --min-pts 25 --eps -1 --threshold 30 --frac 0.01
 ```
 
-Outputs `clusters.png` (the 3-D plot) and prints a per-cluster pixel count + mean
-color. `colors_in.csv` / `colors_clustered.csv` are written in the working dir.
+Each cluster's pixels are drawn in the cluster's **mean color**, wrapped in a
+transparent (approx. minimal) **enclosing sphere** of the same color, over a gray
+backdrop (so near-white clusters stay visible). The tool also prints a per-cluster
+pixel count + mean color. `colors_in.csv` / `colors_clustered.csv` are written in
+the working dir.
+
+### Output modes
+- *(no `--out`/`--html`)* — opens an **interactive** matplotlib window: **drag to
+  rotate, scroll to zoom**.
+- `--out plot.png` — save a static image.
+- `--html plot.html` — save an **interactive plotly** page (drag/zoom in a browser);
+  needs `pip install plotly`.
+
+Extra flags: `--true-color` colors each pixel by its own RGB instead of the cluster
+mean; `--no-spheres` hides the enclosing spheres.
 
 ## Parameters & tips
 
