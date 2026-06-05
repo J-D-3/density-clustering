@@ -58,6 +58,10 @@ __pycache__/
 /optics_perf.csv
 optics_perf.csv
 
+# Scratch output written by the color-clustering example
+colors_in.csv
+colors_clustered.csv
+
 #Output
 *.ppm
 !*/Opencv_ClusterImage_Test/ClusterImage_*.ppm
