@@ -13,7 +13,9 @@
 #include <algorithm>
 #include <array>
 #include <iostream>
+#include <optional>
 #include <random>
+#include <set>
 #include <vector>
 
 
@@ -564,6 +566,88 @@ TEST_CASE("chi_cluster_tree_tests_2") {
 	CHECK( trees_are_equal( clusters[1].get_root(), expected_result[1].get_root() ) );
 }
 
+
+// Naive O(n^2) OPTICS reference: brute-force neighbor scan + linear-scan seed
+// selection. Uses the same distance primitives so the ordering must match the
+// optimized library bit-for-bit; the independence is in the control flow
+// (no kd-tree, no heap), which is exactly what we want to validate.
+template <class T, std::size_t Dim>
+std::vector<optics::reachability_dist> brute_force_optics(
+	const std::vector<std::array<T, Dim>>& points, std::size_t min_pts, double eps ) {
+	const std::size_t n = points.size();
+	const double eps2 = eps * eps;
+	std::vector<char> processed( n, 0 );
+	std::vector<double> reach( n, -1.0 );
+	std::vector<std::size_t> order;
+	std::set<std::size_t> seeds;
+
+	const auto neighbors = [&]( std::size_t i ) {
+		std::vector<std::size_t> r;
+		for ( std::size_t j = 0; j < n; ++j ) {
+			if ( optics::detail::square_dist( points[i], points[j] ) <= eps2 ) { r.push_back( j ); }
+		}
+		return r;
+	};
+	const auto core_dist = [&]( std::size_t i, const std::vector<std::size_t>& nb ) -> std::optional<double> {
+		if ( nb.size() < min_pts ) { return std::nullopt; }
+		std::vector<double> sq;
+		for ( std::size_t j : nb ) { sq.push_back( optics::detail::square_dist( points[i], points[j] ) ); }
+		std::sort( sq.begin(), sq.end() );
+		return std::sqrt( sq[min_pts - 1] );
+	};
+	const auto relax = [&]( std::size_t i, const std::vector<std::size_t>& nb, double cd ) {
+		for ( std::size_t o : nb ) {
+			if ( processed[o] ) { continue; }
+			const double nrd = std::max( cd, optics::detail::dist( points[i], points[o] ) );
+			if ( reach[o] < 0.0 || nrd < reach[o] ) { reach[o] = nrd; seeds.insert( o ); }
+		}
+	};
+
+	for ( std::size_t i = 0; i < n; ++i ) {
+		if ( processed[i] ) { continue; }
+		processed[i] = 1;
+		order.push_back( i );
+		auto nb = neighbors( i );
+		if ( auto cd = core_dist( i, nb ) ) { relax( i, nb, *cd ); }
+		while ( !seeds.empty() ) {
+			const std::size_t best = *std::min_element( seeds.begin(), seeds.end(),
+				[&]( std::size_t a, std::size_t b ) { return reach[a] != reach[b] ? reach[a] < reach[b] : a < b; } );
+			seeds.erase( best );
+			if ( processed[best] ) { continue; }
+			processed[best] = 1;
+			order.push_back( best );
+			auto nb2 = neighbors( best );
+			if ( auto cd = core_dist( best, nb2 ) ) { relax( best, nb2, *cd ); }
+		}
+	}
+	std::vector<optics::reachability_dist> result;
+	for ( std::size_t idx : order ) { result.emplace_back( idx, reach[idx] ); }
+	return result;
+}
+
+TEST_CASE("reference: library matches brute-force O(n^2) OPTICS") {
+	// 2D: three well-separated blobs (no pairwise distance near eps).
+	{
+		const std::vector<std::array<double, 2>> centers = { { 0, 0 }, { 40, 0 }, { 20, 35 } };
+		const auto points = optics::testdata::gaussian_blobs<double, 2>( centers, 40, 1.5 );
+		const std::size_t min_pts = 5;
+		const double eps = 15.0;
+		const auto ref = brute_force_optics( points, min_pts, eps );
+		CHECK( optics::compute_reachability_dists( points, min_pts, eps, optics::NeighborMode::Precompute, 4 ) == ref );
+		CHECK( optics::compute_reachability_dists( points, min_pts, eps, optics::NeighborMode::OnDemand, 1 ) == ref );
+	}
+	// 3D, with some noise points (undefined core-distance paths).
+	{
+		const std::vector<std::array<double, 3>> centers = { { 0, 0, 0 }, { 50, 0, 0 }, { 0, 50, 0 } };
+		auto points = optics::testdata::gaussian_blobs<double, 3>( centers, 50, 2.0 );
+		const auto noise = optics::testdata::uniform_noise<double, 3>( 15, -30.0, 80.0, 99 );
+		points.insert( points.end(), noise.begin(), noise.end() );
+		const std::size_t min_pts = 6;
+		const double eps = 10.0;
+		const auto ref = brute_force_optics( points, min_pts, eps );
+		CHECK( optics::compute_reachability_dists( points, min_pts, eps ) == ref );
+	}
+}
 
 TEST_CASE("convenience: convert_cloud + cluster_dbscan + extract_xi") {
 	// Integer cloud (e.g. color-ish data) -> float, then a one-call DBSCAN cut.
