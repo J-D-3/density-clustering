@@ -508,4 +508,40 @@ std::vector<std::vector<std::array<T, dimension>>> get_cluster_points(
 	return result;
 }
 
+
+//=== Convenience entry points ===============================================
+
+// Convert an integer/byte cloud (e.g. uint8 color data) to a float/double cloud,
+// since the algorithm requires a floating-point coordinate type:
+//   auto cloud = optics::convert_cloud<float>( uint8_points );
+template <typename Out, typename In, std::size_t Dim>
+std::vector<std::array<Out, Dim>> convert_cloud( const std::vector<std::array<In, Dim>>& in ) {
+	std::vector<std::array<Out, Dim>> out;
+	out.reserve( in.size() );
+	for ( const auto& p : in ) {
+		std::array<Out, Dim> q;
+		for ( std::size_t k = 0; k < Dim; ++k ) { q[k] = static_cast<Out>( p[k] ); }
+		out.push_back( q );
+	}
+	return out;
+}
+
+// One-call DBSCAN-style clustering: compute the ordering and cut at a threshold.
+// Returns one index list per cluster (noise points become singletons).
+template <class T, std::size_t Dim, class Backend = NanoflannBackend<T, Dim>>
+std::vector<std::vector<std::size_t>> cluster_dbscan(
+	const std::vector<std::array<T, Dim>>& points, std::size_t min_pts, double threshold,
+	double epsilon = -1.0, NeighborMode mode = NeighborMode::Precompute, unsigned n_threads = 0 ) {
+	const auto reach = compute_reachability_dists<T, Dim, Backend>( points, min_pts, epsilon, mode, n_threads );
+	return get_cluster_indices( reach, threshold );
+}
+
+// Xi (steep-area) clusters as point-index lists, in one call from a cluster-ordering.
+inline std::vector<std::vector<std::size_t>> extract_xi(
+	const std::vector<reachability_dist>& reach_dists, double chi, std::size_t min_pts,
+	double steep_area_min_diff = 0.0 ) {
+	const auto flat = get_chi_clusters_flat( reach_dists, chi, min_pts, steep_area_min_diff );
+	return get_cluster_indices( reach_dists, flat );
+}
+
 }  // namespace optics

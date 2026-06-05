@@ -45,6 +45,12 @@ optics::compute_reachability_dists<T, Dim, Backend>(
     n_threads = 0);                         // 0 => hardware concurrency
 ```
 
+### Convenience helpers
+
+- `optics::cluster_dbscan(points, min_pts, threshold)` — compute the ordering and cut at a threshold in one call (returns one index list per cluster).
+- `optics::extract_xi(reach_dists, chi, min_pts)` — Xi (steep-area) clusters as point-index lists.
+- `optics::convert_cloud<float>(int_points)` — convert an integer/byte cloud (e.g. `uint8` color data) to a floating-point cloud, since `T` must be `float`/`double`.
+
 ### Visualizing results
 
 The core writes no images; export CSV and render with the bundled script (matplotlib):

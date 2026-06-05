@@ -565,6 +565,23 @@ TEST_CASE("chi_cluster_tree_tests_2") {
 }
 
 
+TEST_CASE("convenience: convert_cloud + cluster_dbscan + extract_xi") {
+	// Integer cloud (e.g. color-ish data) -> float, then a one-call DBSCAN cut.
+	std::vector<std::array<int, 2>> int_pts = {
+		{ 100,100 },{ 102,100 },{ 101,101 }, { 0,0 },{ 1,0 },{ 0,1 }, { -100,-100 },{ -102,-100 },{ -101,-101 } };
+	auto cloud = optics::convert_cloud<float>( int_pts );
+	auto clusters = optics::cluster_dbscan( cloud, 2, 10.0 );
+	CHECK( clusters.size() == 3 );
+
+	// Xi clusters as point-index lists from a cluster-ordering.
+	std::vector<optics::reachability_dist> reach_dists = {
+		{ 1,10.0 },{ 2,9.0 },{ 3,9.0 },{ 4,5.0 },{ 5,5.49 },{ 6,5.0 },
+		{ 7,6.5 },{ 8,3.0 },{ 9,2.9 },{ 10,2.8 },{ 11,10.0 },{ 12,12.0 } };
+	auto xi = optics::extract_xi( reach_dists, 0.1, 4 );
+	CHECK( xi.size() == 3 );
+}
+
+
 #ifdef OPTICS_ENABLE_BOOST_RTREE
 // Only built when the optional Boost backend is enabled. Verifies that the
 // Boost R*-tree backend returns the same neighbor sets as nanoflann, and that
