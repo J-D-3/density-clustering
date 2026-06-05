@@ -6,6 +6,7 @@ project(OPTICS-Clustering VERSION 0.9.0 LANGUAGES CXX)
 # library builds with no external dependencies (only the vendored nanoflann).
 option(OPTICS_ENABLE_BOOST_RTREE "Enable the optional Boost rtree backend" OFF)
 option(OPTICS_BUILD_TESTS "Build the OPTICS test suite" ${PROJECT_IS_TOP_LEVEL})
+option(OPTICS_BUILD_EXAMPLES "Build the example programs" ${PROJECT_IS_TOP_LEVEL})
 option(OPTICS_INSTALL "Generate install/package rules" ${PROJECT_IS_TOP_LEVEL})
 
 include(GNUInstallDirs)  # defines CMAKE_INSTALL_INCLUDEDIR (used below) before first use
@@ -29,6 +30,10 @@ endif()
 if(OPTICS_BUILD_TESTS)
     enable_testing()
     add_subdirectory(test)
+endif()
+
+if(OPTICS_BUILD_EXAMPLES)
+    add_subdirectory(examples)
 endif()
 
 # Install + package config so downstream can `find_package(optics)` or FetchContent.
