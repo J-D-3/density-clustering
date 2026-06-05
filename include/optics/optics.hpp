@@ -7,6 +7,7 @@
 
 #include "backend.hpp"
 #include "tree.hpp"
+#include "version.hpp"
 #include "detail/math.hpp"
 #include "detail/thread_pool.hpp"
 
