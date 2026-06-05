@@ -62,6 +62,11 @@ optics_perf.csv
 colors_in.csv
 colors_clustered.csv
 
+# Generated datasets (reproducible via tools/datasets.py) and example outputs
+/data/
+*_clustered.csv
+*_labels.csv
+
 #Output
 *.ppm
 !*/Opencv_ClusterImage_Test/ClusterImage_*.ppm
