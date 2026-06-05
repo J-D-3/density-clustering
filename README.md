@@ -64,7 +64,7 @@ python tools/visualize.py --points points.csv --reach reach.csv --out plot.png
 
 ## Dependencies
 
-None required: [nanoflann](https://github.com/jlblancoc/nanoflann) is vendored under `include/optics/`, and everything else is the C++ standard library. **Boost** is an optional alternative neighbor-search backend, enabled with `-DOPTICS_ENABLE_BOOST_RTREE=ON`.
+None required: [nanoflann](https://github.com/jlblancoc/nanoflann) (BSD 2-Clause) is vendored under `include/optics/`, and everything else is the C++ standard library. **Boost** is an optional alternative neighbor-search backend, enabled with `-DOPTICS_ENABLE_BOOST_RTREE=ON`. Bundled third-party licenses are listed in [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md).
 
 ## Building & testing
 
@@ -78,4 +78,4 @@ ctest --preset linux-gcc
 
 ## License
 
-Distributed under the MIT Software License (X11 license). (See accompanying file LICENSE.)
+Distributed under the MIT Software License (X11 license). (See accompanying file LICENSE.) Bundled third-party components and their licenses are listed in [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md).
