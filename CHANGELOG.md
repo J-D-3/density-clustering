@@ -4,7 +4,7 @@ All notable changes to OPTICS-Clustering are documented here. The format is base
 on [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
-## [0.9.0] — unreleased
+## [0.9.0] — 2026-06-05
 
 First modernized release: a fast, dependency-free, cross-platform C++20 library.
 
@@ -20,6 +20,11 @@ First modernized release: a fast, dependency-free, cross-platform C++20 library.
 - Dimension-agnostic CSV export (`optics/io.hpp`) and `tools/visualize.py`
   (matplotlib 2D/3D/PCA scatter + reachability plot).
 - N-dimensional synthetic-data generators (`optics/testdata.hpp`).
+- Convenience helpers: `cluster_dbscan`, `extract_xi`, and `convert_cloud<float>`
+  (uint8/int → float, e.g. for color data).
+- `examples/color_clustering` — end-to-end 3-D color-space clustering of an image
+  (mean-color points + enclosing spheres; interactive / PNG / plotly output) plus a
+  k-means timing comparison.
 - `optics/version.hpp` (`OPTICS_VERSION*`, `optics::version()`).
 - CMake presets (msvc / linux-gcc / linux-clang) and a GitHub Actions CI matrix
   (Linux GCC/Clang, Windows MSVC, plus a Boost-backend job).
