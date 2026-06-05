@@ -16,7 +16,7 @@
 #include <cmath>
 #include <cstddef>
 #include <optional>
-#include <set>
+#include <queue>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -84,40 +84,17 @@ std::optional<double> compute_core_dist( const Point<T, Dim>& point,
 }
 
 
-inline void erase_idx_from_set( const reachability_dist& d, std::set<reachability_dist>& seeds ) {
-	const auto erased = seeds.erase( d );
-	assert( erased == 1 );
-	(void)erased;
-}
+// Min-heap order for the seed priority queue: smallest reachability first, ties
+// broken by smallest point index (matching reachability_dist's operator<). The
+// queue uses lazy deletion -- "decrease-key" pushes a new (smaller) entry and
+// the authoritative value lives in the reachability[] array; stale pops are
+// skipped. This reproduces the std::set pop order exactly while avoiding a node
+// allocation per insert.
+struct seed_min_heap_cmp {
+	bool operator()( const reachability_dist& a, const reachability_dist& b ) const { return b < a; }
+};
 
-template <typename T>
-T pop_from_set( std::set<T>& set ) {
-	T element = *set.begin();
-	set.erase( set.begin() );
-	return element;
-}
-
-
-// Relax the reachability distances of the unprocessed neighbors of a core
-// object and (re-)insert them into the seed priority queue.
-template <typename T, std::size_t Dim>
-void update( const Point<T, Dim>& point, const std::vector<Point<T, Dim>>& points,
-			 const std::vector<std::size_t>& neighbor_indices, double core_dist,
-			 const std::vector<char>& processed, std::vector<double>& reachability,
-			 std::set<reachability_dist>& seeds ) {
-	for ( const auto& o : neighbor_indices ) {
-		if ( processed[o] ) { continue; }
-		const double new_reachability_dist = std::max( core_dist, detail::dist( point, points[o] ) );
-		if ( reachability[o] < 0.0 ) {
-			reachability[o] = new_reachability_dist;
-			seeds.insert( reachability_dist( o, new_reachability_dist ) );
-		} else if ( new_reachability_dist < reachability[o] ) {
-			erase_idx_from_set( reachability_dist( o, reachability[o] ), seeds );
-			reachability[o] = new_reachability_dist;
-			seeds.insert( reachability_dist( o, new_reachability_dist ) );
-		}
-	}
-}
+using seed_queue = std::priority_queue<reachability_dist, std::vector<reachability_dist>, seed_min_heap_cmp>;
 
 
 //=== Epsilon estimation =====================================================
@@ -214,27 +191,39 @@ std::vector<reachability_dist> compute_reachability_dists(
 		return ondemand_buf;
 	};
 
+	// Reused across points; drained to empty whenever an expansion finishes.
+	seed_queue seeds;
+	const auto relax_neighbors = [&]( std::size_t idx, const std::vector<std::size_t>& nbrs, double core_dist ) {
+		for ( const std::size_t o : nbrs ) {
+			if ( processed[o] ) { continue; }
+			const double new_rd = std::max( core_dist, detail::dist( points[idx], points[o] ) );
+			if ( reachability[o] < 0.0 || new_rd < reachability[o] ) {
+				reachability[o] = new_rd;  // authoritative; the prior heap entry becomes stale
+				seeds.push( reachability_dist( o, new_rd ) );
+			}
+		}
+	};
+
 	for ( std::size_t point_idx = 0; point_idx < n; point_idx++ ) {
 		if ( processed[point_idx] ) { continue; }
 		processed[point_idx] = 1;
 		ordered_list.push_back( point_idx );
-		std::set<reachability_dist> seeds;
 
 		const auto& neighbor_indices = neighbors_of( point_idx );
 		const auto core_dist = compute_core_dist( points[point_idx], points, neighbor_indices, min_pts );
-		if ( !core_dist.has_value() ) { continue; }
+		if ( core_dist.has_value() ) { relax_neighbors( point_idx, neighbor_indices, *core_dist ); }
 
-		update( points[point_idx], points, neighbor_indices, *core_dist, processed, reachability, seeds );
 		while ( !seeds.empty() ) {
-			const reachability_dist s = pop_from_set( seeds );
-			assert( !processed[s.point_index] );
+			const reachability_dist s = seeds.top();
+			seeds.pop();
+			// Lazy deletion: skip entries already processed or superseded by a smaller push.
+			if ( processed[s.point_index] || s.reach_dist != reachability[s.point_index] ) { continue; }
 			processed[s.point_index] = 1;
 			ordered_list.push_back( s.point_index );
 
 			const auto& s_neighbor_indices = neighbors_of( s.point_index );
 			const auto s_core_dist = compute_core_dist( points[s.point_index], points, s_neighbor_indices, min_pts );
-			if ( !s_core_dist.has_value() ) { continue; }
-			update( points[s.point_index], points, s_neighbor_indices, *s_core_dist, processed, reachability, seeds );
+			if ( s_core_dist.has_value() ) { relax_neighbors( s.point_index, s_neighbor_indices, *s_core_dist ); }
 		}
 	}
 	assert( ordered_list.size() == n );
