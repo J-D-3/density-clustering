@@ -83,3 +83,7 @@ private:
 };
 
 }  // namespace optics
+
+#ifdef OPTICS_ENABLE_BOOST_RTREE
+#include "boost_backend.hpp"
+#endif
