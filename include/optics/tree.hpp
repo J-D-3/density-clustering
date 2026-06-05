@@ -1,5 +1,5 @@
 // Copyright Ingo Proff 2016.
-// https://github.com/CrikeeIP/OPTICS-Clustering
+// https://github.com/J-D-3/OPTICS-Clustering
 // Distributed under the MIT Software License (X11 license).
 // (See accompanying file LICENSE)
 

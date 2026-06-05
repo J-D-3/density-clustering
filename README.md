@@ -1,14 +1,14 @@
-[![CI](https://github.com/CrikeeIP/OPTICS-Clustering/actions/workflows/ci.yml/badge.svg)](https://github.com/CrikeeIP/OPTICS-Clustering/actions/workflows/ci.yml)
+[![CI](https://github.com/J-D-3/OPTICS-Clustering/actions/workflows/ci.yml/badge.svg)](https://github.com/J-D-3/OPTICS-Clustering/actions/workflows/ci.yml)
 
 # OPTICS-Clustering
 
-**Ordering Points To Identify the Clustering Structure ([OPTICS](https://github.com/CrikeeIP/OPTICS-Clustering/blob/master/background/OPTICS.pdf))** is an algorithm for finding density-based clusters in spatial data, presented by Mihael Ankerst, Markus M. Breunig, Hans-Peter Kriegel and Jörg Sander in 1999.
+**Ordering Points To Identify the Clustering Structure ([OPTICS](https://github.com/J-D-3/OPTICS-Clustering/blob/master/background/OPTICS.pdf))** is an algorithm for finding density-based clusters in spatial data, presented by Mihael Ankerst, Markus M. Breunig, Hans-Peter Kriegel and Jörg Sander in 1999.
 
 ## Introduction
 
-This repository is a header-only **C++20** implementation of OPTICS. It provides an easy-to-use clustering algorithm that does not require knowing the number of clusters a priori, and that scales to large point clouds (millions of points). You can inspect the cluster structure visually (via a [reachability plot](https://github.com/CrikeeIP/OPTICS-Clustering/blob/master/resources/reachabilityplot.png)) and extract clusters either with a simple reachability threshold or with the hierarchical ξ (Xi) method.
+This repository is a header-only **C++20** implementation of OPTICS. It provides an easy-to-use clustering algorithm that does not require knowing the number of clusters a priori, and that scales to large point clouds (millions of points). You can inspect the cluster structure visually (via a [reachability plot](https://github.com/J-D-3/OPTICS-Clustering/blob/master/resources/reachabilityplot.png)) and extract clusters either with a simple reachability threshold or with the hierarchical ξ (Xi) method.
 
-For background on the algorithm see the [paper](https://github.com/CrikeeIP/OPTICS-Clustering/blob/master/background/OPTICS.pdf), [Wikipedia](https://en.wikipedia.org/wiki/OPTICS_algorithm), or [YouTube](https://www.youtube.com/watch?v=8kJjgowewOs).
+For background on the algorithm see the [paper](https://github.com/J-D-3/OPTICS-Clustering/blob/master/background/OPTICS.pdf), [Wikipedia](https://en.wikipedia.org/wiki/OPTICS_algorithm), or [YouTube](https://www.youtube.com/watch?v=8kJjgowewOs).
 
 ## Usage
 
