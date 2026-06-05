@@ -68,12 +68,19 @@ std::optional<double> compute_core_dist( const Point<T, Dim>& point,
 										 std::size_t min_pts ) {
 	if ( neighbor_indices.size() < min_pts ) { return std::nullopt; }
 
-	std::vector<std::size_t> idxs( neighbor_indices );
-	std::nth_element( idxs.begin(), idxs.begin() + ( min_pts - 1 ), idxs.end(),
-					  [&points, &point]( std::size_t a, std::size_t b ) {
-						  return detail::square_dist( point, points[a] ) < detail::square_dist( point, points[b] );
-					  } );
-	return detail::dist( point, points[idxs[min_pts - 1]] );
+	// Compute each neighbor's squared distance exactly once into a reused buffer,
+	// then nth_element on the distances directly. Avoids the per-call index-vector
+	// copy and the repeated distance computations a key-comparator would incur.
+	// thread_local: the buffer is reused across calls (no allocation after warmup)
+	// and stays correct if core_dist is ever invoked from multiple threads.
+	thread_local std::vector<double> sq_dists;
+	sq_dists.clear();
+	sq_dists.reserve( neighbor_indices.size() );
+	for ( const std::size_t idx : neighbor_indices ) {
+		sq_dists.push_back( detail::square_dist( point, points[idx] ) );
+	}
+	std::nth_element( sq_dists.begin(), sq_dists.begin() + ( min_pts - 1 ), sq_dists.end() );
+	return std::sqrt( sq_dists[min_pts - 1] );
 }
 
 
