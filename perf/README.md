@@ -113,17 +113,20 @@ is effectively ~O(n²) here, and Precompute memory is ~O(n²) too:
 |----------|---------------|-----------|-------------|----------------|----------------|-----------|
 | 800      | 203           | 3 ms      | 2 ms        | 478 ms         | 6 ms           | 11 ms     |
 | 8 000    | 1 962         | 142 ms    | 141 ms      | 5 405 ms       | 205 ms         | 18 ms     |
-| 80 000   | 19 258        | 18 514 ms | 19 535 ms   | *(skipped)*    | 25 478 ms      | 63 ms     |
-| 400 000  | ~96 000\*     | *infeasible†* | —       | —              | *(very slow)*  | 235 ms    |
+| 80 000   | 18 940        | 18 514 ms | 19 535 ms   | *(skipped)*    | 25 478 ms      | 63 ms     |
+| 100 000  | 23 461        | 32 125 ms | 33 617 ms   | *(skipped)*    | 49 426 ms      | 92 ms     |
 
-\* extrapolated from the linear `avg_nbrs`-vs-n trend.  † the Precompute neighbor lists alone would
-need ≈ n × avg_nbrs × 8 B ≈ **300 GB**.
+100 000 px is about the **edge of feasibility for Precompute** on this 32 GB box: the neighbor lists
+are n × avg_nbrs × 8 B ≈ **18.8 GB**; 120 k would need ≈ 27 GB and OOMs. Above this, switch to
+`OnDemand` mode (lean memory, no O(n²) buffer) or a smaller ε. scikit-learn's OPTICS is skipped
+above 8 k (it is also ~O(n²) and would take many minutes).
 
 - The average neighborhood grows ~linearly with n, so our OPTICS, scikit-learn's OPTICS, and
-  scikit-learn's DBSCAN are all ~**O(n²)** in this regime (at 80 k, OPTICS and DBSCAN are both tens
-  of seconds). Our OPTICS stays ~40–160× faster than scikit-learn's OPTICS and competitive with its
-  DBSCAN, but the asymptotics are identical.
-- **k-means is the only near-linear method** and the only one that scales to 400 k px comfortably.
+  scikit-learn's DBSCAN are all ~**O(n²)** in this regime. Our OPTICS stays ~40–160× faster than
+  scikit-learn's OPTICS and, by 100 k, **overtakes scikit-learn's DBSCAN** (32 s vs 49 s) while
+  computing the full ordering + hierarchy — but the asymptotics are identical.
+- **k-means is the only near-linear method** (92 ms at 100 k) and the only one that scales much
+  further comfortably.
 - For large color clouds, use a **smaller ε** (tighter color clusters), **OnDemand** mode (lean
   memory, avoids the O(n²) buffer), or **downsample** — not a different backend (see below).
 
