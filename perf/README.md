@@ -68,3 +68,29 @@ Precompute-vs-OnDemand gap at 1e7: the sequential ordering loop is a large fract
 scale, so parallelizing only the query phase is Amdahl-limited. Confirms the Tier-0 finding that
 OPTICS is **query-bound** — future speedups live in the query path (backend, approximate-NN),
 not the surrounding bookkeeping.
+
+## Real-world: color clustering on RGB images (`tools/timing_images.py`)
+
+Runtime of color clustering (RGB in 3-D) on three standard test images, 8000 pixels sampled per
+image into the *same* cloud for every method (so scikit-learn's OPTICS stays tractable),
+`min_pts=10`, our backends at 4 threads:
+
+| image (8000 px) | nanoflann | nf-approx | boost-rtree | sklearn-OPTICS | sklearn-DBSCAN | sklearn-KMeans |
+|-----------------|-----------|-----------|-------------|----------------|----------------|----------------|
+| airplane        | 204 ms    | 193 ms    | 255 ms      | 5169 ms        | 144 ms         | 1934 ms        |
+| fruits          |  44 ms    |  43 ms    |  53 ms      | 4450 ms        |  39 ms         |  509 ms        |
+| parrot          | 142 ms    | 141 ms    | 302 ms      | 4607 ms        | 151 ms         |  264 ms        |
+
+Takeaways: our OPTICS ordering is **~25–100× faster than scikit-learn's OPTICS** on the identical
+cloud, and lands in the *same band as scikit-learn's DBSCAN* despite computing the full
+cluster-ordering + hierarchy (not just flat labels). The approximate backend matches exact in 3-D
+(its payoff is in high dimensions); Boost's R\*-tree trails nanoflann. The gap vs scikit-learn
+OPTICS widens with the pixel budget. Reproduce:
+
+```sh
+# harness built with -DOPTICS_ENABLE_BOOST_RTREE=ON to include the Boost row
+python tools/timing_images.py --exe build-boost/test/Release/optics_backend_compare \
+    --images airplane.ppm fruits.ppm parrot.ppm --n 8000 --plot ../docs/img/timing_images.png
+```
+
+![Color-clustering runtime on RGB images](../docs/img/timing_images.png)
