@@ -26,6 +26,25 @@ OPTICS is a density-based clustering algorithm. It does **not** need the number 
 
 **Be honest about the trade-offs.** If your clusters are roughly convex and you know *k*, **k-means** is far faster and perfectly adequate. If a single density threshold separates your clusters, **DBSCAN** is simpler and quick. Reach for **OPTICS** when you don't know *k*, when clusters sit at *different* densities (where one DBSCAN `eps` can't win), or when you want to *see* the cluster hierarchy via the reachability plot before committing to a cut. OPTICS is the most general of the three — and the most expensive, its cost dominated by neighbor queries (see the benchmarks). You can independently sanity-check our results against scikit-learn's OPTICS with `tools/validate_sklearn.py`.
 
+## Quickstart: cluster your own data
+
+You don't have to write any C++ to try it — build the bundled example and point it at a CSV (one numeric row per point, with a `x0,x1,...` header; extra trailing columns are ignored).
+
+```sh
+# 1. Build the example (MSVC shown; use linux-gcc / linux-clang on Linux/macOS)
+cmake --preset msvc
+cmake --build --preset msvc --target cluster_csv
+python tools/datasets.py --name moons --n 1500 --out data/moons.csv   # or bring your own CSV
+
+# 2. Cluster it  ->  writes <out>_points.csv (labels) and <out>_reach.csv (the plot)
+build/examples/Release/cluster_csv data/moons.csv data/moons 10        # 10 = min_pts
+
+# 3. See it
+python tools/visualize.py --points data/moons_points.csv --reach data/moons_reach.csv
+```
+
+On Linux/macOS the binary is `build/examples/cluster_csv`. Python deps for the tools: `pip install -r requirements.txt`. See [`examples/cluster_csv/README.md`](examples/cluster_csv/README.md) for all options, and **Reading the reachability plot** / **Choosing parameters** below.
+
 ## Usage
 
 A point is a `std::array<T, Dim>` of Cartesian coordinates (`T` is `float` or `double`); a cloud is a `std::vector` of those.
@@ -83,6 +102,27 @@ python tools/visualize.py --points points.csv --reach reach.csv --out plot.png
 ```
 
 `visualize.py` handles 2D and 3D scatter (e.g. color spaces) and falls back to a PCA projection for higher dimensions.
+
+## Reading the reachability plot
+
+OPTICS doesn't hand you clusters directly — it produces a *reachability plot*: the points laid out in cluster-order, each bar its reachability distance. Read it like a landscape.
+
+![Reachability plot guide](docs/img/reachability_guide.png)
+
+- **Valleys** (runs of low bars) are clusters — points packed densely together.
+- **Peaks** (tall bars) are the jumps *between* clusters, or sparse/noise points.
+- A **horizontal cut** at some height is exactly the flat `get_cluster_indices(reach, threshold)` extraction: every valley dipping below the line becomes a cluster. The hierarchical ξ method (`get_chi_clusters` / `extract_xi`) instead follows the valley walls, so it can pull out clusters that sit at *different* depths — the case a single horizontal cut (or a single DBSCAN `eps`) cannot capture.
+
+## Choosing parameters
+
+- **`min_pts`** (required) — how many neighbors make a point "core". Higher values smooth the plot and ignore small/noisy groups; lower values are more sensitive. A common starting point is `2 × dim` to `~20`; raise it if the plot is jagged, lower it if real small clusters get swallowed.
+- **`epsilon`** (optional, auto-estimated when `≤ 0`) — the largest neighborhood radius considered. It mainly bounds cost and memory: large enough captures all structure; too small truncates the plot (UNDEFINED reachability, shown as full-height bars). Leave it auto unless you need to cap work on huge clouds.
+- **`threshold`** (flat cut) — the reachability height at which valleys become clusters. Pick it by *looking at the plot*: just under the valley floors you care about. Smaller → tighter, more clusters; larger → fewer, looser clusters.
+- **`chi`** (ξ method) — relative steepness (e.g. `0.05`) that delimits a cluster's walls. Use ξ instead of a flat threshold when clusters live at different densities.
+
+## Performance expectations
+
+OPTICS comfortably handles **millions** of low-dimensional points (e.g. ~6 s for 1e6 3-D points on a 22-thread desktop; see [`perf/README.md`](perf/README.md)). Cost is dominated by neighbor queries, so high dimensionality is expensive (the curse of dimensionality) — for the 16-D regime prefer `Precompute` + threads and consider the approximate backend (`ApproxNanoflannBackend`). The ordering loop itself is sequential; the parallel win is in the query phase.
 
 ## Dependencies
 
