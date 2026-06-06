@@ -27,6 +27,7 @@ and `cluster_csv` reads them).
 | `visualize.py` | Render a points CSV (2-D/3-D scatter, PCA for higher-D) and, optionally, the reachability plot. `--out plot.png` saves headlessly. |
 | `compare_algorithms.py` | Side-by-side figure: OPTICS (this library) vs scikit-learn k-means and DBSCAN. |
 | `validate_sklearn.py` | Cross-check our reachability + labels against `sklearn.cluster.OPTICS` (Spearman + ARI). |
+| `timing_compare.py` | Time the internal backends (nanoflann / approx / Boost) vs `sklearn.cluster.OPTICS` across cases; needs the `optics_backend_compare` harness. |
 
 ## End-to-end
 

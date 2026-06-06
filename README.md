@@ -124,6 +124,10 @@ OPTICS doesn't hand you clusters directly — it produces a *reachability plot*:
 
 OPTICS comfortably handles **millions** of low-dimensional points (e.g. ~6 s for 1e6 3-D points on a 22-thread desktop; see [`perf/README.md`](perf/README.md)). Cost is dominated by neighbor queries, so high dimensionality is expensive (the curse of dimensionality) — for the 16-D regime prefer `Precompute` + threads and consider the approximate backend (`ApproxNanoflannBackend`). The ordering loop itself is sequential; the parallel win is in the query phase.
 
+On the *same* clouds, this library's ordering is **one to three orders of magnitude faster than scikit-learn's OPTICS** (it shares nanoflann's KD-tree and a tight ordering loop). The chart below compares the internal backends — exact nanoflann, the approximate backend, and Boost's R\*-tree — against scikit-learn across 2-D/3-D/16-D cases; note that Boost's R\*-tree degrades in 16-D where nanoflann holds up. Reproduce with `python tools/timing_compare.py --exe build/test/Release/optics_backend_compare` (all internal timings use 4 threads).
+
+![OPTICS timing: backends vs scikit-learn](docs/img/timing_compare.png)
+
 ## Dependencies
 
 None required: [nanoflann](https://github.com/jlblancoc/nanoflann) (BSD 2-Clause) is vendored under `include/optics/`, and everything else is the C++ standard library. **Boost** is an optional alternative neighbor-search backend, enabled with `-DOPTICS_ENABLE_BOOST_RTREE=ON`. Bundled third-party licenses are listed in [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md).

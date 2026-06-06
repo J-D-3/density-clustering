@@ -46,3 +46,8 @@ target_include_directories(optics_perf SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DI
 # Large-scale (1e6-1e7) 3D timing harness. Release config; not a ctest.
 add_executable(optics_scale Benchmark/scale.cpp)
 target_link_libraries(optics_scale PRIVATE optics::optics)
+
+# Per-backend timing over CSV clouds (paired with tools/timing_compare.py, which adds
+# scikit-learn OPTICS). Release config; not a ctest.
+add_executable(optics_backend_compare Benchmark/backend_compare.cpp)
+target_link_libraries(optics_backend_compare PRIVATE optics::optics)
