@@ -17,7 +17,7 @@ python tools/datasets.py --name varied --n 1500 --out data/varied.csv   # mixed 
 ## 2. Cluster
 
 ```sh
-# cluster_csv in.csv [out_prefix] [min_pts] [epsilon] [threshold] [min_cluster_frac]
+# cluster_csv in.csv [out_prefix] [min_pts] [epsilon] [threshold] [min_cluster_frac] [xi_chi] [n_threads]
 cluster_csv data/moons.csv data/moons 10 -1 3.0 0.02
 ```
 
@@ -25,6 +25,10 @@ cluster_csv data/moons.csv data/moons 10 -1 3.0 0.02
 - `threshold` cuts the reachability plot into clusters (smaller = tighter clusters;
   this is the DBSCAN-style flat cut, `get_cluster_indices`).
 - `min_cluster_frac` folds clusters smaller than this fraction of the cloud into noise.
+- `xi_chi > 0` switches to the hierarchical **Xi** extraction (`extract_xi`) instead of the
+  flat threshold cut — use it when clusters sit at *different densities* (where one threshold
+  can't separate them all).
+- `n_threads` (default 4) — worker threads for the parallel neighbor precompute.
 
 It writes `<out>_points.csv` (`x0,...,cluster_id`) and `<out>_reach.csv` (the
 ordering + reachability), and prints the cluster/noise counts.

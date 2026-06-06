@@ -11,6 +11,12 @@ cmake --build build --config Release --target optics_perf
 ./build/test/Release/optics_perf      # writes optics_perf.csv in the working dir
 ```
 
+**Threads.** All timing harnesses (`optics_perf`, `optics_benchmark`, `optics_scale`) default
+to **4 worker threads** so numbers are reproducible and comparable across machines instead of
+scaling with the dev box's core count. Override with the `OPTICS_BENCH_THREADS` environment
+variable (e.g. `OPTICS_BENCH_THREADS=16`). For the memory-bound precompute phase, 4 threads is
+often *faster* than saturating all cores.
+
 ## `baseline.csv`
 
 Committed reference for the current line of development (refreshed for v0.9.1).
@@ -22,8 +28,8 @@ Committed reference for the current line of development (refreshed for v0.9.1).
 
 - **`dense 3D 30k core-dist {scan,knn}`** — a few very dense blobs (flat-color-like), so
   each point's eps-neighborhood is huge. The Knn core-distance (issue #24) avoids scanning
-  the neighborhood and is markedly faster here (~5.9 s → ~4.3 s, ≈27% on this machine); the
-  gap widens as neighborhoods grow.
+  the neighborhood and is faster here (~2.9 s → ~2.4 s, ≈16% at 4 threads); the gap widens as
+  neighborhoods grow.
 - **`backend 16D 8k nanoflann {exact,approx}`** (plus `boost rtree` when built with
   `-DOPTICS_ENABLE_BOOST_RTREE=ON`) — the same 16-D cloud across backends, comparing the
   exact KD-tree, the eps-approximate backend (issue #28), and Boost's R*-tree.
@@ -46,9 +52,11 @@ varies).
 ## Large-scale validation (`optics_scale`)
 
 `optics_scale [n]` times the 3D color-space-style workload (uniform cloud, min_pts=16) at
-1e6–1e7 points. Baselines on a 22-thread desktop (Release), committed-code path:
+1e6–1e7 points. The figures below are indicative, captured on a 22-thread desktop (Release) at
+full hardware concurrency; the harness now defaults to 4 threads (override with
+`OPTICS_BENCH_THREADS`), so Precompute timings on the same box will differ:
 
-| workload      | Precompute (xHW) | OnDemand (x1) |
+| workload      | Precompute       | OnDemand (x1) |
 |---------------|------------------|---------------|
 | 3D float  1e6 | ~5.8 s           | ~7.8 s        |
 | 3D double 1e6 | ~6.7 s           | ~9.3 s        |

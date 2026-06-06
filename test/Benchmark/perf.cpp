@@ -14,6 +14,8 @@
 #include <optics/optics.hpp>
 #include <optics/testdata.hpp>
 
+#include "bench_config.hpp"
+
 #include <array>
 #include <cstddef>
 #include <fstream>
@@ -98,8 +100,10 @@ std::vector<std::array<T, Dim>> dense_cloud( std::size_t n_points ) {
 
 int main() {
 	const unsigned hw = std::max( 1u, std::thread::hardware_concurrency() );
+	const unsigned nt = bench::threads();  // default 4, override via OPTICS_BENCH_THREADS
+	const std::string xt = "x" + std::to_string( nt );
 	ankerl::nanobench::Bench bench;
-	bench.title( "OPTICS perf (hw=" + std::to_string( hw ) + ")" ).warmup( 1 ).relative( false );
+	bench.title( "OPTICS perf (threads=" + std::to_string( nt ) + ", hw=" + std::to_string( hw ) + ")" ).warmup( 1 ).relative( false );
 
 	// Hot path that #12 targets. Each lambda call sweeps all points (~ms), so
 	// force several iterations per epoch for a stable median.
@@ -112,27 +116,27 @@ int main() {
 	// per epoch to tame run-to-run variance (each call is ~100 ms).
 	bench.minEpochIterations( 3 );
 	bench_ordering<double, 3>( bench, "ordering 3D double 30k precompute x1", 30000, 16, optics::NeighborMode::Precompute, 1 );
-	bench_ordering<double, 3>( bench, "ordering 3D double 30k precompute xHW", 30000, 16, optics::NeighborMode::Precompute, hw );
+	bench_ordering<double, 3>( bench, "ordering 3D double 30k precompute " + xt, 30000, 16, optics::NeighborMode::Precompute, nt );
 	bench_ordering<double, 3>( bench, "ordering 3D double 30k ondemand x1", 30000, 16, optics::NeighborMode::OnDemand, 1 );
-	bench_ordering<float, 3>( bench, "ordering 3D float 30k precompute xHW", 30000, 16, optics::NeighborMode::Precompute, hw );
-	bench_ordering<double, 16>( bench, "ordering 16D double 8k precompute xHW", 8000, 16, optics::NeighborMode::Precompute, hw );
+	bench_ordering<float, 3>( bench, "ordering 3D float 30k precompute " + xt, 30000, 16, optics::NeighborMode::Precompute, nt );
+	bench_ordering<double, 16>( bench, "ordering 16D double 8k precompute " + xt, 8000, 16, optics::NeighborMode::Precompute, nt );
 
 	// Dense-neighborhood regime (issue #24): Scan vs Knn core-distance on a cloud
 	// whose eps-neighborhoods are huge. Knn should win as the neighborhoods grow.
 	{
 		const auto dense = dense_cloud<double, 3>( 30000 );
-		bench_ordering_mode<double, 3>( bench, "dense 3D 30k core-dist scan", dense, 16, optics::NeighborMode::Precompute, hw, optics::CoreDistMode::Scan );
-		bench_ordering_mode<double, 3>( bench, "dense 3D 30k core-dist knn", dense, 16, optics::NeighborMode::Precompute, hw, optics::CoreDistMode::Knn );
+		bench_ordering_mode<double, 3>( bench, "dense 3D 30k core-dist scan", dense, 16, optics::NeighborMode::Precompute, nt, optics::CoreDistMode::Scan );
+		bench_ordering_mode<double, 3>( bench, "dense 3D 30k core-dist knn", dense, 16, optics::NeighborMode::Precompute, nt, optics::CoreDistMode::Knn );
 	}
 
 	// Backend comparison (issue #26): same 16-D cloud, exact vs approximate nanoflann
 	// (and Boost when the optional backend is enabled).
 	{
 		const auto pts16 = optics::testdata::uniform_noise<double, 16>( 8000, 0.0, 1000.0 );
-		bench_ordering_backend<optics::NanoflannBackend<double, 16>, double, 16>( bench, "backend 16D 8k nanoflann exact", pts16, 16, hw );
-		bench_ordering_backend<optics::ApproxNanoflannBackend<double, 16>, double, 16>( bench, "backend 16D 8k nanoflann approx", pts16, 16, hw );
+		bench_ordering_backend<optics::NanoflannBackend<double, 16>, double, 16>( bench, "backend 16D 8k nanoflann exact", pts16, 16, nt );
+		bench_ordering_backend<optics::ApproxNanoflannBackend<double, 16>, double, 16>( bench, "backend 16D 8k nanoflann approx", pts16, 16, nt );
 #ifdef OPTICS_ENABLE_BOOST_RTREE
-		bench_ordering_backend<optics::BoostRTreeBackend<double, 16>, double, 16>( bench, "backend 16D 8k boost rtree", pts16, 16, hw );
+		bench_ordering_backend<optics::BoostRTreeBackend<double, 16>, double, 16>( bench, "backend 16D 8k boost rtree", pts16, 16, nt );
 #endif
 	}
 

@@ -47,18 +47,23 @@ bool is_number( const std::string& s ) {
 }
 
 // Run OPTICS for a compile-time dimension over a flat row-major coordinate buffer.
+// xi_chi > 0 selects the hierarchical Xi (steep-area) extraction instead of the flat
+// threshold cut -- it recovers clusters at differing densities that one threshold can't.
 template <std::size_t Dim>
 int run( const std::vector<double>& flat, std::size_t n, const std::string& out_prefix,
-		 std::size_t min_pts, double eps, double threshold, double min_cluster_frac ) {
+		 std::size_t min_pts, double eps, double threshold, double min_cluster_frac,
+		 unsigned n_threads, double xi_chi ) {
 	std::vector<std::array<double, Dim>> points( n );
 	for ( std::size_t i = 0; i < n; ++i ) {
 		for ( std::size_t d = 0; d < Dim; ++d ) { points[i][d] = flat[i * Dim + d]; }
 	}
 
 	const auto t0 = clk::now();
-	const auto reach = optics::compute_reachability_dists( points, min_pts, eps );
+	const auto reach = optics::compute_reachability_dists( points, min_pts, eps, optics::NeighborMode::Precompute, n_threads );
 	const auto t1 = clk::now();
-	const auto clusters = optics::get_cluster_indices( reach, threshold );
+	const auto clusters = ( xi_chi > 0.0 )
+		? optics::extract_xi( reach, xi_chi, min_pts )
+		: optics::get_cluster_indices( reach, threshold );
 	const std::size_t min_size = static_cast<std::size_t>( min_cluster_frac * static_cast<double>( n ) );
 	const auto labels = optics::io::cluster_labels( n, clusters, min_size );
 	const auto t2 = clk::now();
@@ -85,7 +90,8 @@ int run( const std::vector<double>& flat, std::size_t n, const std::string& out_
 
 int main( int argc, char** argv ) {
 	if ( argc < 2 ) {
-		std::cerr << "usage: cluster_csv in.csv [out_prefix] [min_pts] [eps] [threshold] [min_cluster_frac]\n";
+		std::cerr << "usage: cluster_csv in.csv [out_prefix] [min_pts] [eps] [threshold] [min_cluster_frac] [xi_chi] [n_threads]\n"
+				  << "  xi_chi > 0 uses the hierarchical Xi extraction (varying densities); n_threads defaults to 4\n";
 		return 2;
 	}
 	const std::string in_path = argv[1];
@@ -94,6 +100,8 @@ int main( int argc, char** argv ) {
 	const double eps = ( argc > 4 ) ? std::atof( argv[4] ) : -1.0;
 	const double threshold = ( argc > 5 ) ? std::atof( argv[5] ) : 2.0;
 	const double min_cluster_frac = ( argc > 6 ) ? std::atof( argv[6] ) : 0.01;
+	const double xi_chi = ( argc > 7 ) ? std::atof( argv[7] ) : 0.0;
+	const unsigned n_threads = ( argc > 8 ) ? static_cast<unsigned>( std::atoi( argv[8] ) ) : 4u;
 
 	std::ifstream in( in_path );
 	if ( !in ) { std::cerr << "cannot open " << in_path << "\n"; return 1; }
@@ -137,10 +145,10 @@ int main( int argc, char** argv ) {
 	if ( n == 0 ) { return 1; }
 
 	switch ( dim ) {
-		case 2:  return run<2>( flat, n, out_prefix, min_pts, eps, threshold, min_cluster_frac );
-		case 3:  return run<3>( flat, n, out_prefix, min_pts, eps, threshold, min_cluster_frac );
-		case 4:  return run<4>( flat, n, out_prefix, min_pts, eps, threshold, min_cluster_frac );
-		case 16: return run<16>( flat, n, out_prefix, min_pts, eps, threshold, min_cluster_frac );
+		case 2:  return run<2>( flat, n, out_prefix, min_pts, eps, threshold, min_cluster_frac, n_threads, xi_chi );
+		case 3:  return run<3>( flat, n, out_prefix, min_pts, eps, threshold, min_cluster_frac, n_threads, xi_chi );
+		case 4:  return run<4>( flat, n, out_prefix, min_pts, eps, threshold, min_cluster_frac, n_threads, xi_chi );
+		case 16: return run<16>( flat, n, out_prefix, min_pts, eps, threshold, min_cluster_frac, n_threads, xi_chi );
 		default:
 			std::cerr << "unsupported dimension " << dim << " (supported: 2, 3, 4, 16)\n";
 			return 1;
