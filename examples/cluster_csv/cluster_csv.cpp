@@ -58,8 +58,11 @@ int run( const std::vector<double>& flat, std::size_t n, const std::string& out_
 		for ( std::size_t d = 0; d < Dim; ++d ) { points[i][d] = flat[i * Dim + d]; }
 	}
 
+	// OnDemand by default (lean memory, faster on dense clouds); n_threads > 1 opts
+	// into the parallel Precompute cache (faster on sparse/low-density clouds).
+	const auto mode = ( n_threads > 1 ) ? optics::NeighborMode::Precompute : optics::NeighborMode::OnDemand;
 	const auto t0 = clk::now();
-	const auto reach = optics::compute_reachability_dists( points, min_pts, eps, optics::NeighborMode::Precompute, n_threads );
+	const auto reach = optics::compute_reachability_dists( points, min_pts, eps, mode, n_threads );
 	const auto t1 = clk::now();
 	const auto clusters = ( xi_chi > 0.0 )
 		? optics::extract_xi( reach, xi_chi, min_pts )
@@ -91,7 +94,8 @@ int run( const std::vector<double>& flat, std::size_t n, const std::string& out_
 int main( int argc, char** argv ) {
 	if ( argc < 2 ) {
 		std::cerr << "usage: cluster_csv in.csv [out_prefix] [min_pts] [eps] [threshold] [min_cluster_frac] [xi_chi] [n_threads]\n"
-				  << "  xi_chi > 0 uses the hierarchical Xi extraction (varying densities); n_threads defaults to 4\n";
+				  << "  xi_chi > 0 uses the hierarchical Xi extraction (varying densities).\n"
+				  << "  n_threads: 1 (default) = lean OnDemand; >1 = parallel Precompute with that many threads.\n";
 		return 2;
 	}
 	const std::string in_path = argv[1];
@@ -101,7 +105,7 @@ int main( int argc, char** argv ) {
 	const double threshold = ( argc > 5 ) ? std::atof( argv[5] ) : 2.0;
 	const double min_cluster_frac = ( argc > 6 ) ? std::atof( argv[6] ) : 0.01;
 	const double xi_chi = ( argc > 7 ) ? std::atof( argv[7] ) : 0.0;
-	const unsigned n_threads = ( argc > 8 ) ? static_cast<unsigned>( std::atoi( argv[8] ) ) : 4u;
+	const unsigned n_threads = ( argc > 8 ) ? static_cast<unsigned>( std::atoi( argv[8] ) ) : 1u;
 
 	std::ifstream in( in_path );
 	if ( !in ) { std::cerr << "cannot open " << in_path << "\n"; return 1; }

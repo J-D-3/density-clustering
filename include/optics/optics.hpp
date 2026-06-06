@@ -171,15 +171,21 @@ double epsilon_estimation( const std::vector<Point<T, dimension>>& points, std::
 //   T, Dim   : coordinate type (float/double) and dimensionality (deduced from points).
 //   Backend  : neighbor-search backend; defaults to nanoflann.
 //   epsilon  : generating distance; auto-estimated when <= 0.
-//   mode     : Precompute (parallel, default) or OnDemand neighbor acquisition.
-//   n_threads: worker threads for Precompute (0 => hardware concurrency).
+//   mode     : OnDemand (default) queries one neighborhood at a time during the
+//              ordering -- O(one neighborhood) memory, and on dense clouds it is also
+//              faster (it avoids materializing/re-reading a huge neighbor cache).
+//              Precompute caches every neighborhood up front, in parallel: faster on
+//              sparse/low-density clouds, but uses O(n * avg_neighbors) memory (which
+//              can be tens of GB on dense data). Both yield identical results.
+//   n_threads: worker threads for the Precompute query phase (0 => hardware
+//              concurrency). Ignored by OnDemand (the ordering loop is sequential).
 //   core_dist: Scan (default) or Knn core-distance computation. Knn is faster on
 //              dense clouds and yields identical results; it falls back to Scan
 //              for backends that do not model KnnCoreDist.
 template <class T, std::size_t Dim, class Backend = NanoflannBackend<T, Dim>>
 std::vector<reachability_dist> compute_reachability_dists(
 	const std::vector<std::array<T, Dim>>& points, std::size_t min_pts,
-	double epsilon = -1.0, NeighborMode mode = NeighborMode::Precompute, unsigned n_threads = 0,
+	double epsilon = -1.0, NeighborMode mode = NeighborMode::OnDemand, unsigned n_threads = 0,
 	CoreDistMode core_dist_mode = CoreDistMode::Scan ) {
 
 	static_assert( std::is_floating_point_v<T>, "compute_reachability_dists: coordinate type 'T' must be float or double" );
@@ -577,7 +583,7 @@ std::vector<std::array<Out, Dim>> convert_cloud( const std::vector<std::array<In
 template <class T, std::size_t Dim, class Backend = NanoflannBackend<T, Dim>>
 std::vector<std::vector<std::size_t>> cluster_dbscan(
 	const std::vector<std::array<T, Dim>>& points, std::size_t min_pts, double threshold,
-	double epsilon = -1.0, NeighborMode mode = NeighborMode::Precompute, unsigned n_threads = 0 ) {
+	double epsilon = -1.0, NeighborMode mode = NeighborMode::OnDemand, unsigned n_threads = 0 ) {
 	const auto reach = compute_reachability_dists<T, Dim, Backend>( points, min_pts, epsilon, mode, n_threads );
 	return get_cluster_indices( reach, threshold );
 }

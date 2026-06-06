@@ -28,7 +28,9 @@ cluster_csv data/moons.csv data/moons 10 -1 3.0 0.02
 - `xi_chi > 0` switches to the hierarchical **Xi** extraction (`extract_xi`) instead of the
   flat threshold cut — use it when clusters sit at *different densities* (where one threshold
   can't separate them all).
-- `n_threads` (default 4) — worker threads for the parallel neighbor precompute.
+- `n_threads` — **1 (default)** runs the lean **OnDemand** mode (one neighborhood at a time;
+  faster on dense clouds and never blows up memory); **> 1** opts into the parallel **Precompute**
+  cache with that many threads (faster on sparse/low-density clouds, at O(n × avg_neighbors) memory).
 
 It writes `<out>_points.csv` (`x0,...,cluster_id`) and `<out>_reach.csv` (the
 ordering + reachability), and prints the cluster/noise counts.
