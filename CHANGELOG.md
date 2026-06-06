@@ -20,9 +20,15 @@ comparison to other algorithms, independent validation, and backend/perf hardeni
   (0 = exact, the default) (#28).
 - `examples/cluster_csv` — a generic "cluster your own CSV" example (2/3/4/16-D) writing
   labeled-points + reachability CSVs for `tools/visualize.py` (#25).
-- Python tooling: `tools/datasets.py` (reproducible 2-D datasets), `compare_algorithms.py`
-  (OPTICS vs k-means vs DBSCAN figure), `validate_sklearn.py` (cross-check against
-  scikit-learn OPTICS), `requirements.txt`, and one-command `scripts/demo.{ps1,sh}`.
+- Python tooling: `tools/datasets.py` (reproducible 2-D datasets, incl. a varying-density
+  case), `compare_algorithms.py` (OPTICS vs k-means vs DBSCAN figure, with the
+  different-density case OPTICS wins via Xi), `validate_sklearn.py` (cross-check against
+  scikit-learn OPTICS), `timing_compare.py` + the `optics_backend_compare` harness
+  (this library is ~100–800× faster than scikit-learn OPTICS across the internal
+  backends), `requirements.txt`, and one-command `scripts/demo.{ps1,sh}`.
+- Timing harnesses default to **4 worker threads** (override with `OPTICS_BENCH_THREADS`)
+  for reproducible numbers; `cluster_csv` gained `xi_chi` (hierarchical extraction) and
+  `n_threads` arguments.
 - `optics_py` — optional pybind11 binding for 1/2/3/4-D NumPy clouds
   (`OPTICS_BUILD_PYTHON`, off by default) (#23).
 - README: an honest OPTICS-vs-k-means-vs-DBSCAN comparison, a "run on your own data"
