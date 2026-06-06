@@ -55,6 +55,31 @@ jobs:
       - name: Test
         run: ctest --preset linux-gcc
 
+  python-binding:
+    name: Python binding (pybind11)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build deps
+        run: python -m pip install pybind11 numpy
+
+      - name: Configure (binding only)
+        run: >
+          cmake -S . -B build-py -DOPTICS_BUILD_PYTHON=ON
+          -DOPTICS_BUILD_TESTS=OFF -DOPTICS_BUILD_EXAMPLES=OFF
+          -Dpybind11_DIR=$(python -m pybind11 --cmakedir)
+
+      - name: Build
+        run: cmake --build build-py
+
+      - name: Smoke test
+        run: python python/test_optics_py.py build-py/python
+
   sanitizers:
     name: Linux Clang ASan+UBSan
     runs-on: ubuntu-latest
