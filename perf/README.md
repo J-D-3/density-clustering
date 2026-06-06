@@ -142,7 +142,34 @@ above 8 k (it is also ~O(n²) and would take many minutes).
 - **k-means is the only near-linear method** (92 ms at 100 k) and the only one that scales much
   further comfortably.
 - For large color clouds, use a **smaller ε** (tighter color clusters), **OnDemand** mode (lean
-  memory, avoids the O(n²) buffer), or **downsample** — not a different backend (see below).
+  memory, avoids the O(n²) buffer, *and faster on dense clouds* — see below), or **downsample** —
+  not a different backend.
+
+### Precompute vs OnDemand (`optics_mode_compare`)
+
+`Precompute` caches every point's ε-neighborhood up front, in parallel — **O(n × avg_nbrs) memory**.
+`OnDemand` queries one neighborhood at a time during the (sequential) ordering — **O(one
+neighborhood) memory**. On the dense color clouds above (parrot, auto-ε, 4 threads for Precompute):
+
+| n        | avg nbrs | Precompute buffer | Precompute | OnDemand |
+|----------|----------|-------------------|------------|----------|
+| 8 000    | 1 962    | 0.13 GB           | 170 ms     | 146 ms   |
+| 80 000   | 19 258   | 12.3 GB           | 19.5 s     | **13.7 s** |
+| 100 000  | 23 378   | 18.7 GB           | 30.7 s     | **20.6 s** |
+| 200 000  | 46 979   | 75.2 GB           | *OOM — skipped* | **87.9 s** |
+
+- **OnDemand scales past the Precompute memory wall.** Its footprint is ~O(one neighborhood) plus
+  the points/tree (tens of MB at 200 k), *not* the O(n × avg_nbrs) buffer — so it clusters the 200 k
+  cloud whose Precompute buffer would need **75 GB**. Memory stops being the limit; time (still
+  ~O(n²) on dense color) becomes it.
+- **On dense clouds OnDemand is also ~30% _faster_**, despite giving up the parallel precompute and
+  re-querying sequentially: materializing and then re-reading the 12–19 GB neighbor cache costs more
+  memory bandwidth than re-querying each neighborhood into a small, hot, reused buffer. The
+  parallel-precompute win only pays off when neighborhoods are **small** — on the sparse/uniform
+  `optics_scale` clouds above, Precompute is the faster mode.
+
+**Rule of thumb: Precompute for sparse / low-density clouds; OnDemand for dense clouds and for any
+cloud too large to cache.** Reproduce: `optics_mode_compare parrot_8000.csv parrot_200000.csv 10 cap=19`.
 
 ### Why the approximate backend rarely beats exact (`optics_approx_probe`)
 

@@ -56,3 +56,8 @@ target_link_libraries(optics_backend_compare PRIVATE optics::optics)
 # approximate backend can/can't beat exact). Release config; not a ctest.
 add_executable(optics_approx_probe Benchmark/approx_probe.cpp)
 target_link_libraries(optics_approx_probe PRIVATE optics::optics)
+
+# Precompute vs OnDemand neighbor-acquisition timing + memory (OnDemand scales past the
+# Precompute memory wall). Release config; not a ctest.
+add_executable(optics_mode_compare Benchmark/mode_compare.cpp)
+target_link_libraries(optics_mode_compare PRIVATE optics::optics)
