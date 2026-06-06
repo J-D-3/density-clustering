@@ -35,9 +35,12 @@ import datasets as ds  # tools/datasets.py (same directory)
 
 # Per-dataset parameters (documented, picked to give each method a fair shot).
 SPECS = [
-    # name,    n,     true_k, optics_thresh, dbscan_eps, min_pts
-    ("moons",  1500,  2,      3.0,           1.6,        10),
-    ("varied", 1500,  3,      2.5,           1.2,        10),
+    # name,     n,     true_k, optics_thresh, dbscan_eps, min_pts, xi_chi
+    ("moons",   1500,  2,      3.0,           1.6,        10,      0.0),
+    ("varied",  1500,  3,      2.5,           1.2,        10,      0.0),
+    # Different-density clusters: a single DBSCAN eps cannot separate all three, but
+    # OPTICS reads them out of the reachability hierarchy (the Xi method).
+    ("density", 1600,  3,      2.5,           0.9,        12,      0.05),
 ]
 
 
@@ -65,8 +68,8 @@ def load_labels(points_csv):
     return np.asarray(labels, dtype=int)
 
 
-def run_ours(exe, coords_csv, out_prefix, min_pts, thresh):
-    cmd = [exe, coords_csv, out_prefix, str(min_pts), "-1", str(thresh), "0.01"]
+def run_ours(exe, coords_csv, out_prefix, min_pts, thresh, xi_chi=0.0):
+    cmd = [exe, coords_csv, out_prefix, str(min_pts), "-1", str(thresh), "0.01", str(xi_chi), "4"]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
     return load_labels(out_prefix + "_points.csv")
 
@@ -108,18 +111,19 @@ def main(argv=None):
     if len(SPECS) == 1:
         axes = axes[None, :]
 
-    for row, (name, n, true_k, thresh, eps, min_pts) in enumerate(SPECS):
+    for row, (name, n, true_k, thresh, eps, min_pts, xi_chi) in enumerate(SPECS):
         coords_csv = os.path.join(args.data_dir, f"{name}.csv")
         if not os.path.isfile(coords_csv):
             X, _ = ds.GENERATORS[name](n=n, seed=0)
             ds.write_csv(X, np.zeros(len(X), dtype=int), coords_csv)
         X = load_coords(coords_csv)
 
-        ours = run_ours(exe, coords_csv, os.path.join(args.data_dir, f"{name}_cmp"), min_pts, thresh)
+        ours = run_ours(exe, coords_csv, os.path.join(args.data_dir, f"{name}_cmp"), min_pts, thresh, xi_chi)
         km = KMeans(n_clusters=true_k, n_init=10, random_state=0).fit_predict(X)
         db = DBSCAN(eps=eps, min_samples=min_pts).fit_predict(X)
 
-        scatter(axes[row][0], X, ours, f"OPTICS (this lib): {n_clusters(ours)} clusters")
+        optics_name = "OPTICS-Xi (this lib)" if xi_chi > 0 else "OPTICS (this lib)"
+        scatter(axes[row][0], X, ours, f"{optics_name}: {n_clusters(ours)} clusters")
         scatter(axes[row][1], X, km, f"k-means (k={true_k}, given)")
         scatter(axes[row][2], X, db, f"DBSCAN (eps={eps}): {n_clusters(db)} clusters")
         axes[row][0].set_ylabel(name, fontsize=11)

@@ -97,10 +97,45 @@ def make_varied(n=1500, seed=0):
     return x[perm], y[perm]
 
 
+def make_density(n=1500, seed=0):
+    """The canonical varying-density failure for a single global density.
+
+    Two tight, dense clusters sit close together; a third, very sparse cluster has
+    internal spacing *larger than the gap* between the dense pair. So any DBSCAN
+    ``eps`` small enough to keep the dense pair apart shatters the sparse cluster into
+    noise, and any ``eps`` large enough to connect the sparse cluster merges the dense
+    pair — no single ``eps`` recovers all three. OPTICS reads all three out of the
+    reachability hierarchy (the Xi method), and k-means (fixed k, convex) ignores the
+    densities and the noise entirely."""
+    rng = np.random.default_rng(seed)
+    dense = max(1, int(round(n * 0.25)))
+    sparse = max(1, int(round(n * 0.32)))
+    noise = max(1, int(round(n * 0.05)))
+    parts, labels = [], []
+    # Two very tight, dense clusters with a small gap between them.
+    parts.append(rng.normal((-1.0, 0.0), 0.22, size=(dense, 2)));  labels += [0] * dense
+    parts.append(rng.normal(( 1.0, 0.0), 0.22, size=(dense, 2)));  labels += [1] * dense
+    # A *uniform-density* disk for the sparse cluster: solid enough to be one cluster,
+    # but with point spacing larger than the dense pair's gap -- so any eps big enough
+    # to connect the disk also bridges the dense pair, and any eps that keeps the pair
+    # apart shatters the disk. No single DBSCAN eps recovers all three.
+    radius = rng.uniform(0.0, 1.0, sparse) ** 0.5 * 6.0
+    angle = rng.uniform(0.0, 2.0 * math.pi, sparse)
+    parts.append(np.column_stack([0.0 + radius * np.cos(angle), 9.0 + radius * np.sin(angle)]))
+    labels += [2] * sparse
+    parts.append(rng.uniform(low=(-7.0, -4.0), high=(7.0, 16.0), size=(noise, 2)))
+    labels += [-1] * noise
+    x = np.vstack(parts).astype(float)
+    y = np.asarray(labels, dtype=int)
+    perm = rng.permutation(len(x))
+    return x[perm], y[perm]
+
+
 GENERATORS = {
     "blobs": make_blobs,
     "moons": make_moons,
     "varied": make_varied,
+    "density": make_density,
 }
 
 
