@@ -77,6 +77,11 @@ neighborhoods *and* separates color modes), and/or reduce `--max-dim`. The CSV
 round-trip in this example is **not** the bottleneck (tens of ms); the algorithm
 on dense data is.
 
+Since v0.9.1 the library defaults to **OnDemand** neighbor acquisition, which on these
+dense color clouds keeps memory flat (no giant neighbor cache — Precompute would need
+~19 GB at 100k px) *and* runs ~30% faster, so the cost above is **time, not memory**.
+The full size/mode/backend analysis is in [`perf/README.md`](../../perf/README.md).
+
 `compare_kmeans.py` times the OPTICS ordering against scikit-learn k-means (told
 the cluster count OPTICS found) on the same pixels (needs `pip install scikit-learn`):
 

@@ -77,9 +77,9 @@ The full signature lets you choose the backend, neighbor-acquisition strategy, a
 ```cpp
 optics::compute_reachability_dists<T, Dim, Backend>(
     points, min_pts,
-    epsilon  = -1.0,                        // auto-estimated when <= 0
-    mode     = optics::NeighborMode::Precompute,  // or OnDemand (lean memory)
-    n_threads = 0);                         // 0 => hardware concurrency
+    epsilon  = -1.0,                       // auto-estimated when <= 0
+    mode     = optics::NeighborMode::OnDemand,  // default; Precompute is the parallel, opt-in cache
+    n_threads = 0);                        // threads for Precompute only (0 => hardware concurrency)
 ```
 
 ### Convenience helpers
@@ -140,7 +140,7 @@ For domain-specific tuning and gotchas on image/color data (flat-color regions, 
 
 OPTICS comfortably handles **millions** of low-dimensional points (~6 s for 1e6 3-D points on a 22-thread desktop). Cost is dominated by neighbor queries, so it is **query-bound** and high dimensionality is expensive (the curse of dimensionality). On *dense* data (e.g. flat-color images) neighborhoods grow with n and the ordering tends toward **O(n²)** in both time and memory — keep `epsilon` modest, use `OnDemand` mode, or downsample. On identical clouds this library is **one to three orders of magnitude faster than scikit-learn's OPTICS**, and competitive with scikit-learn's DBSCAN, while k-means (no neighbor graph) remains the cheapest per run.
 
-Tuning knobs: `Precompute` (parallel, default) vs `OnDemand` (lean memory); the thread count; and the backend — exact `NanoflannBackend`, `ApproxNanoflannBackend` (helps only in high dimensions, where search — not neighborhood processing — dominates), or the optional Boost R\*-tree.
+Tuning knobs: **`OnDemand`** (the default — lean memory, and faster on dense clouds) vs **`Precompute`** (opt-in parallel cache, faster on sparse/low-density clouds but O(n × neighbors) memory); the thread count (Precompute only); and the backend — exact `NanoflannBackend`, `ApproxNanoflannBackend` (helps only in high dimensions, where search — not neighborhood processing — dominates), or the optional Boost R\*-tree.
 
 → **Full performance analysis** — committed baselines, scaling by sample size, per-backend and scikit-learn/DBSCAN/k-means comparisons (incl. real images), and *why the approximate backend helps only in high dimensions* — is in **[`perf/README.md`](perf/README.md)**.
 

@@ -36,7 +36,7 @@ ctest --test-dir build -C Release --output-on-failure
 
 The pipeline lives under `include/optics/`. Public entry point is `optics.hpp`.
 
-1. **`compute_reachability_dists<T, Dim, Backend = NanoflannBackend<T,Dim>>(points, min_pts, epsilon = -1, mode = Precompute, n_threads = 0)`** → `std::vector<reachability_dist>` (the cluster-ordering; `reach_dist == -1` means UNDEFINED/unreached). `T` is `float`/`double`, points are `std::vector<std::array<T,Dim>>`. `epsilon <= 0` auto-estimates via `epsilon_estimation`.
+1. **`compute_reachability_dists<T, Dim, Backend = NanoflannBackend<T,Dim>>(points, min_pts, epsilon = -1, mode = OnDemand, n_threads = 0, core_dist = Scan)`** → `std::vector<reachability_dist>` (the cluster-ordering; `reach_dist == -1` means UNDEFINED/unreached). `T` is `float`/`double`, points are `std::vector<std::array<T,Dim>>`. `epsilon <= 0` auto-estimates via `epsilon_estimation`. `mode` defaults to **OnDemand** (see below); `core_dist = Knn` (a `CoreDistMode`) is an equivalent, faster-on-dense core-distance path requiring a backend that models `KnnCoreDist`.
 2. **Extraction:**
    - Threshold cut: `get_cluster_indices(reach_dists, threshold)` → flat clusters (noise → singletons; a deliberate simplification of the paper's ExtractDBSCAN, which also used core-distance).
    - Xi / steep-area: `get_chi_clusters_flat(...)` → flat `(begin,end)` ranges; `get_chi_clusters(...)` builds the nested `cluster_tree` (`tree.hpp`). This is paper Defs 9–11 / Fig. 19 and the most subtle code; its behavior is pinned by the `chi_test_*` cases.
@@ -45,12 +45,12 @@ The pipeline lives under `include/optics/`. Public entry point is `optics.hpp`.
 
 ### Neighbor-search backend seam
 Backends satisfy the `NeighborSearch` C++20 concept (`backend.hpp`): they ingest the cloud once at construction and answer `radius_search(point, r, out)` with **no per-query point conversion**.
-- `NanoflannBackend` (default): a zero-copy adaptor over the user's `std::vector<std::array<T,Dim>>`. **nanoflann's L2 metric works in squared distance** — the backend squares the radius internally.
+- `NanoflannBackend<T,Dim,ApproxEpsPermille=0>` (default): a zero-copy adaptor over the user's `std::vector<std::array<T,Dim>>`. **nanoflann's L2 metric works in squared distance** — the backend squares the radius internally. Also exposes `knn_core_dist` (for `CoreDistMode::Knn`). A non-zero `ApproxEpsPermille` enables nanoflann's eps-approximate search; `ApproxNanoflannBackend<T,Dim,Permille=100>` is the alias.
 - `BoostRTreeBackend` (`boost_backend.hpp`, behind `OPTICS_ENABLE_BOOST_RTREE`): box pre-filter + exact Euclidean check.
-Swapping backends is a single template argument; call sites don't reshape data.
+Swapping backends is a single template argument; call sites don't reshape data. The three internal backends are pinned interchangeable by `boost_backend_tests` (Nanoflann/Boost bit-identical ordering) and the approx recall test.
 
-### Neighbor acquisition & parallelism
-`NeighborMode::Precompute` (default) queries every point's neighbors up front in parallel via `detail/thread_pool.hpp`'s `parallel_for` (`n_threads = 0` ⇒ hardware concurrency); `OnDemand` queries lazily for lean memory on huge clouds. The OPTICS ordering loop itself is sequential; the ε-query phase is the hotspot, so parallel precompute is the main speed lever (the benchmark shows ~10× in 16-D).
+### Neighbor acquisition (mode = OnDemand by default, Precompute opt-in)
+`NeighborMode::OnDemand` (**the default since v0.9.1**) queries one neighborhood at a time during the ordering — **O(one neighborhood) memory**. `Precompute` queries every point's neighbors up front in parallel via `detail/thread_pool.hpp`'s `parallel_for` (`n_threads = 0` ⇒ hardware concurrency) and caches them — **O(n × avg_neighbors) memory**. Both produce identical orderings (pinned by `neighbor_mode_tests`). The OPTICS ordering loop itself is always sequential. Which mode is faster depends on neighborhood density: **Precompute wins on sparse/low-density clouds** (small cache, parallel queries — e.g. ~10× in 16-D); **OnDemand wins on dense clouds** (e.g. color images — it avoids materializing/re-reading a multi-GB cache, ~30% faster at 100k px, and never OOMs). See `perf/README.md`.
 
 Supporting headers: `detail/math.hpp` (distance/`pi`/`in_range`, replacing the old Geometry dep), `testdata.hpp` (N-dim synthetic clouds, shared with the benchmark), `test/support/ppm_fixture.hpp` (P6 reader for hand-drawn 2-D fixtures), `Stopwatch.hpp` (benchmark timing).
 
@@ -59,5 +59,6 @@ Supporting headers: `detail/math.hpp` (distance/`pi`/`in_range`, replacing the o
 - **`epsilon` is a `double` parameter, deliberately not `T`** — making it `T` lets it participate in template deduction and clashes with `T` deduced from `points` (e.g. passing the literal `10`).
 - `T` must be `float`/`double` (`static_assert`); integer coordinate inputs must be converted first.
 - The library throws (`std::invalid_argument`/`std::runtime_error`) instead of calling `std::exit`.
-- 16-D nearest-neighbor is genuinely expensive (curse of dimensionality); prefer `Precompute` + threads, and use the benchmark to pick a backend.
-- `compute_core_dist` copies the neighbor index list per call — fine for realistic neighborhoods, a known target for future optimization on very dense data.
+- 16-D nearest-neighbor is genuinely expensive (curse of dimensionality), and there the *search* dominates — opt into `Precompute` + threads, and the `ApproxNanoflannBackend` actually helps (eps-pruning cuts tree traversal: ~2.4× at eps=1.0 with recall still ~1.0). In **low** dimensions the approximate backend does **not** help (recall stays ~1.0, nothing to prune) — see `perf/README.md`.
+- **Dense neighborhoods (e.g. flat-color images) are the perf trap.** With auto-`epsilon`, the average neighborhood grows ~linearly with n, so the ordering is ~**O(n²)** in time *and* (under Precompute) memory — at ~100k px the Precompute buffer is ~19 GB. The cost is in *processing* neighborhoods (`compute_core_dist` scan + relax, both O(|nbrs|)), **not** the search, so a faster/approximate backend can't fix it; use a smaller `epsilon`, `OnDemand` mode (the default), `CoreDistMode::Knn`, or downsample. (`compute_core_dist` no longer copies the index list — it fills a reused `thread_local` of squared distances.)
+- Perf tooling lives under `test/Benchmark/`: `optics_perf` (nanobench regression), `optics_benchmark`/`optics_scale` (timing), `optics_backend_compare` (per-backend, paired with `tools/timing_compare.py`/`timing_images.py` for scikit-learn), `optics_approx_probe` (approx recall vs eps/dim), `optics_mode_compare` (Precompute vs OnDemand). All default to 4 threads via `bench::threads()` (override `OPTICS_BENCH_THREADS`).

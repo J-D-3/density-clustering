@@ -169,7 +169,10 @@ neighborhood) memory**. On the dense color clouds above (parrot, auto-ε, 4 thre
   `optics_scale` clouds above, Precompute is the faster mode.
 
 **Rule of thumb: Precompute for sparse / low-density clouds; OnDemand for dense clouds and for any
-cloud too large to cache.** Reproduce: `optics_mode_compare parrot_8000.csv parrot_200000.csv 10 cap=19`.
+cloud too large to cache.** Because OnDemand is the safer choice (never OOMs) and wins on the dense
+workloads this library targets, it is the **default mode since v0.9.1**; pass
+`NeighborMode::Precompute` to opt into the parallel cache. Reproduce:
+`optics_mode_compare parrot_8000.csv parrot_200000.csv 10 cap=19`.
 
 ### Why the approximate backend rarely beats exact (`optics_approx_probe`)
 

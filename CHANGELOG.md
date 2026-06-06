@@ -38,6 +38,18 @@ comparison to other algorithms, independent validation, and backend/perf hardeni
   the MSVC CI job (`OPTICS_WARNINGS_AS_ERRORS`) (#34).
 - Perf harness: dense-neighborhood (Scan vs Knn) and backend-comparison scenarios; baseline
   refreshed (#26).
+- Real-image color-clustering runtime analysis (`tools/timing_images.py`) and three new
+  benchmark harnesses: `optics_approx_probe` (approximate-backend recall vs eps/dimension),
+  `optics_mode_compare` (Precompute vs OnDemand time + memory), and the scaling-by-sample-size
+  study — documented in `perf/README.md`, including *why the approximate backend helps only in
+  high dimensions* and the dense-neighborhood O(n²) memory wall.
+
+### Changed
+- **`compute_reachability_dists` and `cluster_dbscan` now default to `NeighborMode::OnDemand`**
+  (was `Precompute`). OnDemand uses O(one neighborhood) memory instead of O(n × avg_neighbors), so
+  it never OOMs on dense data and is ~30% faster there; Precompute (faster on sparse/low-density
+  clouds) is now opt-in. Results are identical; only the time/memory profile changes. `cluster_csv`
+  selects Precompute when `n_threads > 1`.
 
 ### Fixed
 - Backend equivalence is now asserted end-to-end (nanoflann ↔ Boost produce identical
