@@ -151,7 +151,7 @@ Tuning knobs: **`OnDemand`** (the default — lean memory, and faster on dense c
 - **[`examples/color_clustering/README.md`](examples/color_clustering/README.md)** — the color-space guide: image pipeline, output modes, color parameter tips, and gotchas.
 - **[`python/README.md`](python/README.md)** — the optional NumPy (pybind11) binding.
 - **[`tools/README.md`](tools/README.md)** — visualization, dataset generators, and comparison/validation scripts.
-- **[`docs/ROADMAP-0.9.1.md`](docs/ROADMAP-0.9.1.md)** — the current milestone plan.
+- **[`docs/ROADMAP-0.9.1.md`](docs/ROADMAP-0.9.1.md)** — the current milestone plan; **[`docs/ROADMAP-post-0.9.1.md`](docs/ROADMAP-post-0.9.1.md)** — the lookahead toward 1.0.0.
 
 ## Dependencies
 
