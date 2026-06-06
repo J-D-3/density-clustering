@@ -69,6 +69,20 @@ scale, so parallelizing only the query phase is Amdahl-limited. Confirms the Tie
 OPTICS is **query-bound** — future speedups live in the query path (backend, approximate-NN),
 not the surrounding bookkeeping.
 
+## Backends vs scikit-learn — synthetic cases (`tools/timing_compare.py`)
+
+Ordering time of the internal backends — exact nanoflann, the approximate backend, and (when built
+with `-DOPTICS_ENABLE_BOOST_RTREE=ON`) Boost's R\*-tree — against `sklearn.cluster.OPTICS` on shared
+2-D/3-D/16-D clouds, all internal timings at 4 threads. This library is one to three orders of
+magnitude faster than scikit-learn's OPTICS; Boost's R\*-tree degrades in 16-D where nanoflann holds
+up; the approximate backend matches exact here (see the analysis at the end of this file).
+
+```sh
+python tools/timing_compare.py --exe build/test/Release/optics_backend_compare
+```
+
+![OPTICS timing: backends vs scikit-learn](../docs/img/timing_compare.png)
+
 ## Real-world: color clustering on RGB images (`tools/timing_images.py`)
 
 Runtime of color clustering (RGB in 3-D) on three standard test images, 8000 pixels sampled per

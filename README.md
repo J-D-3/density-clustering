@@ -24,7 +24,9 @@ OPTICS is a density-based clustering algorithm. It does **not** need the number 
 | **DBSCAN** | no | yes | yes | no (one global eps) | no | fast | yes |
 | **OPTICS** | no | yes | yes | yes (ordering across scales) | yes (ξ) | slower (query-bound) | yes |
 
-**Be honest about the trade-offs.** If your clusters are roughly convex and you know *k*, **k-means** is far faster and perfectly adequate. If a single density threshold separates your clusters, **DBSCAN** is simpler and quick. Reach for **OPTICS** when you don't know *k*, when clusters sit at *different* densities (where one DBSCAN `eps` can't win), or when you want to *see* the cluster hierarchy via the reachability plot before committing to a cut. OPTICS is the most general of the three — and the most expensive, its cost dominated by neighbor queries (see the benchmarks). You can independently sanity-check our results against scikit-learn's OPTICS with `tools/validate_sklearn.py`.
+**Be honest about the trade-offs.** If your clusters are roughly convex and you know *k*, **k-means** is far faster and perfectly adequate. If a single density threshold separates your clusters, **DBSCAN** is simpler and quick. Reach for **OPTICS** when you don't know *k*, when clusters sit at *different* densities (where one DBSCAN `eps` can't win), or when you want to *see* the cluster hierarchy via the reachability plot before committing to a cut. OPTICS is the most general of the three — and the most expensive, its cost dominated by neighbor queries. You can independently sanity-check our results against scikit-learn's OPTICS with `tools/validate_sklearn.py`.
+
+→ Quantitative runtime comparisons (this library's backends vs scikit-learn OPTICS, DBSCAN, and k-means, across sample sizes and dimensions) are in **[`perf/README.md`](perf/README.md)**.
 
 ## Quickstart: cluster your own data
 
@@ -86,6 +88,18 @@ optics::compute_reachability_dists<T, Dim, Backend>(
 - `optics::extract_xi(reach_dists, chi, min_pts)` — Xi (steep-area) clusters as point-index lists.
 - `optics::convert_cloud<float>(int_points)` — convert an integer/byte cloud (e.g. `uint8` color data) to a floating-point cloud, since `T` must be `float`/`double`.
 
+### Python (optional binding)
+
+An optional [pybind11](https://pybind11.readthedocs.io/) binding exposes OPTICS for **1/2/3/4-D NumPy** clouds (off by default; the C++ library stays dependency-free):
+
+```python
+import numpy as np, optics_py
+labels = optics_py.cluster_dbscan(pts, min_pts=10, threshold=2.0)   # (N, Dim) -> per-point labels
+labels_xi = optics_py.extract_xi(pts, min_pts=10, chi=0.05)
+```
+
+Build + usage in **[`python/README.md`](python/README.md)**. For data already on disk, the `cluster_csv` example + `tools/visualize.py` need no binding at all.
+
 ### Visualizing results
 
 The core writes no images; export CSV and render with the bundled script (matplotlib):
@@ -120,13 +134,24 @@ OPTICS doesn't hand you clusters directly — it produces a *reachability plot*:
 - **`threshold`** (flat cut) — the reachability height at which valleys become clusters. Pick it by *looking at the plot*: just under the valley floors you care about. Smaller → tighter, more clusters; larger → fewer, looser clusters.
 - **`chi`** (ξ method) — relative steepness (e.g. `0.05`) that delimits a cluster's walls. Use ξ instead of a flat threshold when clusters live at different densities.
 
-## Performance expectations
+For domain-specific tuning and gotchas on image/color data (flat-color regions, `eps` in RGB units, separating anti-aliasing/JPEG "bridge" colors), see **[`examples/color_clustering/README.md`](examples/color_clustering/README.md)**.
 
-OPTICS comfortably handles **millions** of low-dimensional points (e.g. ~6 s for 1e6 3-D points on a 22-thread desktop; see [`perf/README.md`](perf/README.md)). Cost is dominated by neighbor queries, so high dimensionality is expensive (the curse of dimensionality) — for the 16-D regime prefer `Precompute` + threads and consider the approximate backend (`ApproxNanoflannBackend`). The ordering loop itself is sequential; the parallel win is in the query phase.
+## Performance
 
-On the *same* clouds, this library's ordering is **one to three orders of magnitude faster than scikit-learn's OPTICS** (it shares nanoflann's KD-tree and a tight ordering loop). The chart below compares the internal backends — exact nanoflann, the approximate backend, and Boost's R\*-tree — against scikit-learn across 2-D/3-D/16-D cases; note that Boost's R\*-tree degrades in 16-D where nanoflann holds up. Reproduce with `python tools/timing_compare.py --exe build/test/Release/optics_backend_compare` (all internal timings use 4 threads).
+OPTICS comfortably handles **millions** of low-dimensional points (~6 s for 1e6 3-D points on a 22-thread desktop). Cost is dominated by neighbor queries, so it is **query-bound** and high dimensionality is expensive (the curse of dimensionality). On *dense* data (e.g. flat-color images) neighborhoods grow with n and the ordering tends toward **O(n²)** in both time and memory — keep `epsilon` modest, use `OnDemand` mode, or downsample. On identical clouds this library is **one to three orders of magnitude faster than scikit-learn's OPTICS**, and competitive with scikit-learn's DBSCAN, while k-means (no neighbor graph) remains the cheapest per run.
 
-![OPTICS timing: backends vs scikit-learn](docs/img/timing_compare.png)
+Tuning knobs: `Precompute` (parallel, default) vs `OnDemand` (lean memory); the thread count; and the backend — exact `NanoflannBackend`, `ApproxNanoflannBackend` (helps only in high dimensions, where search — not neighborhood processing — dominates), or the optional Boost R\*-tree.
+
+→ **Full performance analysis** — committed baselines, scaling by sample size, per-backend and scikit-learn/DBSCAN/k-means comparisons (incl. real images), and *why the approximate backend helps only in high dimensions* — is in **[`perf/README.md`](perf/README.md)**.
+
+## Documentation
+
+- **[`perf/README.md`](perf/README.md)** — performance: benchmarks, scaling, backend & cross-library comparisons, the approximate-backend analysis.
+- **[`examples/cluster_csv/README.md`](examples/cluster_csv/README.md)** — cluster your own CSV (2/3/4/16-D), all options.
+- **[`examples/color_clustering/README.md`](examples/color_clustering/README.md)** — the color-space guide: image pipeline, output modes, color parameter tips, and gotchas.
+- **[`python/README.md`](python/README.md)** — the optional NumPy (pybind11) binding.
+- **[`tools/README.md`](tools/README.md)** — visualization, dataset generators, and comparison/validation scripts.
+- **[`docs/ROADMAP-0.9.1.md`](docs/ROADMAP-0.9.1.md)** — the current milestone plan.
 
 ## Dependencies
 
