@@ -7,6 +7,7 @@ project(OPTICS-Clustering VERSION 0.9.0 LANGUAGES CXX)
 option(OPTICS_ENABLE_BOOST_RTREE "Enable the optional Boost rtree backend" OFF)
 option(OPTICS_BUILD_TESTS "Build the OPTICS test suite" ${PROJECT_IS_TOP_LEVEL})
 option(OPTICS_BUILD_EXAMPLES "Build the example programs" ${PROJECT_IS_TOP_LEVEL})
+option(OPTICS_BUILD_PYTHON "Build the optional pybind11 Python binding" OFF)
 option(OPTICS_INSTALL "Generate install/package rules" ${PROJECT_IS_TOP_LEVEL})
 
 include(GNUInstallDirs)  # defines CMAKE_INSTALL_INCLUDEDIR (used below) before first use
@@ -34,6 +35,23 @@ endif()
 
 if(OPTICS_BUILD_EXAMPLES)
     add_subdirectory(examples)
+endif()
+
+if(OPTICS_BUILD_PYTHON)
+    add_subdirectory(python)
+endif()
+
+# Optional API documentation. `cmake --build <dir> --target docs` when Doxygen is
+# installed; a no-op target otherwise so the call never fails.
+if(PROJECT_IS_TOP_LEVEL)
+    find_package(Doxygen QUIET)
+    if(DOXYGEN_FOUND)
+        add_custom_target(docs
+            COMMAND ${DOXYGEN_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/Doxyfile
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            COMMENT "Generating API documentation with Doxygen"
+            VERBATIM)
+    endif()
 endif()
 
 # Install + package config so downstream can `find_package(optics)` or FetchContent.

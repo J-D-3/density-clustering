@@ -10,6 +10,8 @@
 #include <optics/testdata.hpp>
 #include <optics/Stopwatch.hpp>
 
+#include "bench_config.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -35,7 +37,8 @@ void run( const std::string& label, const std::vector<std::array<T, Dim>>& point
 
 template <class T, std::size_t Dim>
 void scenario( const std::string& title, std::size_t n_points, std::size_t min_pts ) {
-	const unsigned hw = std::max( 1u, std::thread::hardware_concurrency() );
+	const unsigned nt = bench::threads();  // default 4, override via OPTICS_BENCH_THREADS
+	const std::string xt = "x" + std::to_string( nt );
 	// Uniform points: the auto-estimated epsilon then yields realistic, ~min_pts
 	// sized neighborhoods (rather than whole-blob neighborhoods), so the timings
 	// reflect index + query cost rather than a degenerate O(n^2) blow-up.
@@ -43,11 +46,12 @@ void scenario( const std::string& title, std::size_t n_points, std::size_t min_p
 
 	std::cout << title << "  (" << points.size() << " points, dim=" << Dim
 			  << ", T=" << ( sizeof( T ) == 4 ? "float" : "double" ) << ", min_pts=" << min_pts << ")" << std::endl;
-	run<T, Dim, optics::NanoflannBackend<T, Dim>>( "nanoflann  precompute x1 ", points, min_pts, optics::NeighborMode::Precompute, 1 );
-	run<T, Dim, optics::NanoflannBackend<T, Dim>>( "nanoflann  precompute xHW", points, min_pts, optics::NeighborMode::Precompute, hw );
-	run<T, Dim, optics::NanoflannBackend<T, Dim>>( "nanoflann  on-demand  x1 ", points, min_pts, optics::NeighborMode::OnDemand, 1 );
+	run<T, Dim, optics::NanoflannBackend<T, Dim>>( "nanoflann   precompute x1 ", points, min_pts, optics::NeighborMode::Precompute, 1 );
+	run<T, Dim, optics::NanoflannBackend<T, Dim>>( "nanoflann   precompute " + xt, points, min_pts, optics::NeighborMode::Precompute, nt );
+	run<T, Dim, optics::ApproxNanoflannBackend<T, Dim>>( "nf-approx   precompute " + xt, points, min_pts, optics::NeighborMode::Precompute, nt );
+	run<T, Dim, optics::NanoflannBackend<T, Dim>>( "nanoflann   on-demand  x1 ", points, min_pts, optics::NeighborMode::OnDemand, 1 );
 #ifdef OPTICS_ENABLE_BOOST_RTREE
-	run<T, Dim, optics::BoostRTreeBackend<T, Dim>>( "boost-rtree precompute xHW", points, min_pts, optics::NeighborMode::Precompute, hw );
+	run<T, Dim, optics::BoostRTreeBackend<T, Dim>>( "boost-rtree precompute " + xt, points, min_pts, optics::NeighborMode::Precompute, nt );
 #endif
 	std::cout << std::endl;
 }
@@ -60,7 +64,8 @@ int main( int argc, char** argv ) {
 	if ( argc > 1 ) { scale = static_cast<std::size_t>( std::max( 1, std::atoi( argv[1] ) ) ); }
 
 	const unsigned hw = std::max( 1u, std::thread::hardware_concurrency() );
-	std::cout << "OPTICS benchmark (hardware_concurrency=" << hw << ", scale=" << scale << ")\n" << std::endl;
+	std::cout << "OPTICS benchmark (threads=" << bench::threads() << ", hardware_concurrency=" << hw
+			  << ", scale=" << scale << ")\n" << std::endl;
 
 	// Color-space-like: 3-dim. Real targets are 1e6-1e7; scale up via the argument.
 	scenario<float, 3>( "[3D float]", 100000 * scale, 16 );

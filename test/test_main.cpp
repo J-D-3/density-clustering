@@ -317,6 +317,81 @@ TEST_CASE("neighbor_mode_tests") {
 }
 
 
+TEST_CASE("core_dist_mode parity: Knn matches Scan") {
+	// The k-NN core-distance path (issue #24) must produce results bit-identical to
+	// the eps-neighborhood scan: it returns the same kth-nearest distance value.
+	using point = std::array<double, 2>;
+
+	// Gaussian blobs + uniform noise + a dense block of identical points to exercise
+	// the dense-neighborhood regime Knn targets (and tie handling at the kth distance).
+	auto points = optics::testdata::make_blobs<double, 2>( 4, 150, 50.0, 2.0, 123 );
+	const auto noise = optics::testdata::uniform_noise<double, 2>( 100, -60.0, 60.0, 9 );
+	points.insert( points.end(), noise.begin(), noise.end() );
+	for ( int i = 0; i < 40; ++i ) { points.push_back( point{ 5.0, 5.0 } ); }
+
+	const std::size_t min_pts = 8;
+	const auto scan = optics::compute_reachability_dists(
+		points, min_pts, -1.0, optics::NeighborMode::Precompute, 1, optics::CoreDistMode::Scan );
+	const auto knn = optics::compute_reachability_dists(
+		points, min_pts, -1.0, optics::NeighborMode::Precompute, 1, optics::CoreDistMode::Knn );
+	const auto knn_ondemand = optics::compute_reachability_dists(
+		points, min_pts, -1.0, optics::NeighborMode::OnDemand, 1, optics::CoreDistMode::Knn );
+
+	CHECK( scan.size() == points.size() );
+	CHECK( ( knn == scan ) );
+	CHECK( ( knn_ondemand == scan ) );
+
+	std::cout << "CoreDistMode Knn/Scan parity tests successful!" << std::endl;
+}
+
+
+TEST_CASE("approximate backend: bounded recall + interchangeable clustering") {
+	// The approximate backend (issue #28) trades boundary recall for speed via
+	// nanoflann's eps-approximation. On well-separated blobs in a higher-D space it
+	// should keep high neighbor recall and recover the same dense clusters as exact.
+	static const int N = 8;
+	using point = std::array<double, N>;
+
+	// The alias must be a genuinely approximate configuration, and the default exact;
+	// otherwise this test would silently compare a backend against itself.
+	static_assert( optics::ApproxNanoflannBackend<double, N>::search_eps > 0.0f, "approx backend must use eps>0" );
+	static_assert( optics::NanoflannBackend<double, N>::search_eps == 0.0f, "default backend must be exact" );
+
+	const auto points = optics::testdata::make_blobs<double, N>( 5, 200, 60.0, 2.0, 77 );
+	const double eps = 12.0;
+	const std::size_t min_pts = 10;
+
+	const optics::NanoflannBackend<double, N> exact( points );
+	const optics::ApproxNanoflannBackend<double, N> approx( points );  // eps = 0.1 (lossless here)
+
+	// Neighbor recall: the approximate set is a subset of exact; measure coverage.
+	std::size_t exact_total = 0, found_total = 0;
+	for ( std::size_t i = 0; i < points.size(); i += 5 ) {
+		std::vector<std::size_t> a, b;
+		exact.radius_search( points[i], eps, a );
+		approx.radius_search( points[i], eps, b );
+		const std::set<std::size_t> bs( b.begin(), b.end() );
+		exact_total += a.size();
+		for ( const auto idx : a ) { if ( bs.count( idx ) ) { ++found_total; } }
+	}
+	const double recall = static_cast<double>( found_total ) / static_cast<double>( exact_total );
+	CHECK( recall > 0.85 );
+
+	// End-to-end: both backends recover the 5 dense blobs under a threshold cut.
+	const auto reach_exact = optics::compute_reachability_dists<double, N>( points, min_pts, eps );
+	const auto reach_approx = optics::compute_reachability_dists<double, N, optics::ApproxNanoflannBackend<double, N>>( points, min_pts, eps );
+	const auto count_large = []( const std::vector<std::vector<std::size_t>>& cls ) {
+		std::size_t k = 0;
+		for ( const auto& c : cls ) { if ( c.size() >= 100 ) { ++k; } }
+		return k;
+	};
+	CHECK( count_large( optics::get_cluster_indices( reach_exact, eps ) ) == 5 );
+	CHECK( count_large( optics::get_cluster_indices( reach_approx, eps ) ) == 5 );
+
+	std::cout << "Approximate backend recall = " << recall << std::endl;
+}
+
+
 TEST_CASE("chi_test_11") {
    std::vector<optics::reachability_dist> reach_dists = {
 	   {0,-1.000000}, {1,-1.000000}, {2,-1.000000}, {3,-1.000000}, {4,-1.000000}, {5,-1.000000}, {6,-1.000000}, {7,-1.000000}, {8,-1.000000},
@@ -477,8 +552,8 @@ TEST_CASE("tree_tests") {
 		auto& root = T.get_root();
 		root.add_children( std::vector<Node>( { Node( {1,1} ), Node( {1,2} ), Node( {1,3} ) } ) );
 		std::size_t idx = 1;
-		for ( auto& n : root.get_children() ) {
-			n.add_child( Node( { 2, idx++ } ) );
+		for ( auto& child : root.get_children() ) {
+			child.add_child( Node( { 2, idx++ } ) );
 		}
 		auto c = T.flatten();
 	}
@@ -725,10 +800,11 @@ TEST_CASE("convenience: convert_cloud + cluster_dbscan + extract_xi") {
 
 
 #ifdef OPTICS_ENABLE_BOOST_RTREE
-// Only built when the optional Boost backend is enabled. Verifies that the
-// Boost R*-tree backend returns the same neighbor sets as nanoflann, and that
-// it produces the same number of clusters end-to-end.
-TEST_CASE("boost_backend_tests") {
+// Only built when the optional Boost backend is enabled. Verifies that the Boost
+// R*-tree backend is interchangeable with nanoflann (issue #27): identical
+// neighbor sets at several radii, identical OPTICS ordering end-to-end, and the
+// expected dense clusters.
+TEST_CASE("boost_backend_tests: nanoflann/boost equivalence") {
 	static const int N = 2;
 	typedef std::array<double, N> point;
 	const std::vector<point> centers = { { 0, 0 }, { 60, 0 }, { 30, 50 } };
@@ -736,15 +812,25 @@ TEST_CASE("boost_backend_tests") {
 
 	const optics::NanoflannBackend<double, N> nano( points );
 	const optics::BoostRTreeBackend<double, N> boost_be( points );
-	const double eps = 5.0;
-	for ( std::size_t i = 0; i < points.size(); ++i ) {
-		std::vector<std::size_t> a, b;
-		nano.radius_search( points[i], eps, a );
-		boost_be.radius_search( points[i], eps, b );
-		CHECK( sorted( a ) == sorted( b ) );
+
+	// 1) Identical neighbor sets at several radii (sparse, mid, and dense).
+	for ( const double eps : { 2.0, 5.0, 12.0 } ) {
+		for ( std::size_t i = 0; i < points.size(); ++i ) {
+			std::vector<std::size_t> a, b;
+			nano.radius_search( points[i], static_cast<double>( eps ), a );
+			boost_be.radius_search( points[i], static_cast<double>( eps ), b );
+			CHECK( ( sorted( a ) == sorted( b ) ) );
+		}
 	}
 
+	// 2) Identical OPTICS ordering end-to-end. Equal neighbor sets imply equal
+	//    reachability and ordering: tie-breaks are by point index, so neighbor
+	//    iteration order (which differs between the backends) does not matter.
+	const auto reach_nano = optics::compute_reachability_dists<double, N>( points, 10, 10.0 );
 	const auto reach_boost = optics::compute_reachability_dists<double, N, optics::BoostRTreeBackend<double, N>>( points, 10, 10.0 );
+	CHECK( ( reach_nano == reach_boost ) );
+
+	// 3) The expected three dense clusters survive a threshold cut.
 	const auto clusters = optics::get_cluster_indices( reach_boost, 10.0 );
 	std::size_t large = 0;
 	for ( const auto& c : clusters ) { if ( c.size() >= 50 ) ++large; }

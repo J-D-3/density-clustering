@@ -48,7 +48,11 @@ reachdists.bmp
 /Release
 
 build
+build-*/
 dependencies
+
+# Generated API docs (Doxygen)
+docs/api/
 
 # Python tooling
 __pycache__/
@@ -61,6 +65,11 @@ optics_perf.csv
 # Scratch output written by the color-clustering example
 colors_in.csv
 colors_clustered.csv
+
+# Generated datasets (reproducible via tools/datasets.py) and example outputs
+/data/
+*_clustered.csv
+*_labels.csv
 
 #Output
 *.ppm

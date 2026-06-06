@@ -14,6 +14,8 @@
 #include <optics/optics.hpp>
 #include <optics/testdata.hpp>
 
+#include "bench_config.hpp"
+
 #include <array>
 #include <cstddef>
 #include <fstream>
@@ -61,13 +63,47 @@ void bench_ordering( ankerl::nanobench::Bench& bench, const std::string& name, s
 	} );
 }
 
+// End-to-end ordering over a caller-supplied cloud, with an explicit CoreDistMode.
+// Used for the dense-neighborhood comparison (Scan vs Knn, issue #24).
+template <class T, std::size_t Dim>
+void bench_ordering_mode( ankerl::nanobench::Bench& bench, const std::string& name,
+						  const std::vector<std::array<T, Dim>>& points, std::size_t min_pts,
+						  optics::NeighborMode mode, unsigned threads, optics::CoreDistMode cmode ) {
+	bench.batch( 1 ).run( name, [&] {
+		auto rd = optics::compute_reachability_dists( points, min_pts, -1.0, mode, threads, cmode );
+		ankerl::nanobench::doNotOptimizeAway( rd.size() );
+	} );
+}
+
+// End-to-end ordering parameterized on the neighbor-search Backend, for comparing
+// backends (nanoflann exact / approximate / Boost) on the same cloud (issue #26).
+template <class Backend, class T, std::size_t Dim>
+void bench_ordering_backend( ankerl::nanobench::Bench& bench, const std::string& name,
+							 const std::vector<std::array<T, Dim>>& points, std::size_t min_pts, unsigned threads ) {
+	bench.batch( 1 ).run( name, [&] {
+		auto rd = optics::compute_reachability_dists<T, Dim, Backend>(
+			points, min_pts, -1.0, optics::NeighborMode::Precompute, threads );
+		ankerl::nanobench::doNotOptimizeAway( rd.size() );
+	} );
+}
+
+// A dense-neighborhood ("flat-color"-like) cloud: a few very tight, very populous
+// blobs, so each point's eps-neighborhood holds a large fraction of the cloud --
+// the regime where the Knn core-distance avoids an expensive neighborhood scan.
+template <class T, std::size_t Dim>
+std::vector<std::array<T, Dim>> dense_cloud( std::size_t n_points ) {
+	return optics::testdata::make_blobs<T, Dim>( 3, n_points / 3, 50.0, 1.0, 1234 );
+}
+
 }  // namespace
 
 
 int main() {
 	const unsigned hw = std::max( 1u, std::thread::hardware_concurrency() );
+	const unsigned nt = bench::threads();  // default 4, override via OPTICS_BENCH_THREADS
+	const std::string xt = "x" + std::to_string( nt );
 	ankerl::nanobench::Bench bench;
-	bench.title( "OPTICS perf (hw=" + std::to_string( hw ) + ")" ).warmup( 1 ).relative( false );
+	bench.title( "OPTICS perf (threads=" + std::to_string( nt ) + ", hw=" + std::to_string( hw ) + ")" ).warmup( 1 ).relative( false );
 
 	// Hot path that #12 targets. Each lambda call sweeps all points (~ms), so
 	// force several iterations per epoch for a stable median.
@@ -80,10 +116,29 @@ int main() {
 	// per epoch to tame run-to-run variance (each call is ~100 ms).
 	bench.minEpochIterations( 3 );
 	bench_ordering<double, 3>( bench, "ordering 3D double 30k precompute x1", 30000, 16, optics::NeighborMode::Precompute, 1 );
-	bench_ordering<double, 3>( bench, "ordering 3D double 30k precompute xHW", 30000, 16, optics::NeighborMode::Precompute, hw );
+	bench_ordering<double, 3>( bench, "ordering 3D double 30k precompute " + xt, 30000, 16, optics::NeighborMode::Precompute, nt );
 	bench_ordering<double, 3>( bench, "ordering 3D double 30k ondemand x1", 30000, 16, optics::NeighborMode::OnDemand, 1 );
-	bench_ordering<float, 3>( bench, "ordering 3D float 30k precompute xHW", 30000, 16, optics::NeighborMode::Precompute, hw );
-	bench_ordering<double, 16>( bench, "ordering 16D double 8k precompute xHW", 8000, 16, optics::NeighborMode::Precompute, hw );
+	bench_ordering<float, 3>( bench, "ordering 3D float 30k precompute " + xt, 30000, 16, optics::NeighborMode::Precompute, nt );
+	bench_ordering<double, 16>( bench, "ordering 16D double 8k precompute " + xt, 8000, 16, optics::NeighborMode::Precompute, nt );
+
+	// Dense-neighborhood regime (issue #24): Scan vs Knn core-distance on a cloud
+	// whose eps-neighborhoods are huge. Knn should win as the neighborhoods grow.
+	{
+		const auto dense = dense_cloud<double, 3>( 30000 );
+		bench_ordering_mode<double, 3>( bench, "dense 3D 30k core-dist scan", dense, 16, optics::NeighborMode::Precompute, nt, optics::CoreDistMode::Scan );
+		bench_ordering_mode<double, 3>( bench, "dense 3D 30k core-dist knn", dense, 16, optics::NeighborMode::Precompute, nt, optics::CoreDistMode::Knn );
+	}
+
+	// Backend comparison (issue #26): same 16-D cloud, exact vs approximate nanoflann
+	// (and Boost when the optional backend is enabled).
+	{
+		const auto pts16 = optics::testdata::uniform_noise<double, 16>( 8000, 0.0, 1000.0 );
+		bench_ordering_backend<optics::NanoflannBackend<double, 16>, double, 16>( bench, "backend 16D 8k nanoflann exact", pts16, 16, nt );
+		bench_ordering_backend<optics::ApproxNanoflannBackend<double, 16>, double, 16>( bench, "backend 16D 8k nanoflann approx", pts16, 16, nt );
+#ifdef OPTICS_ENABLE_BOOST_RTREE
+		bench_ordering_backend<optics::BoostRTreeBackend<double, 16>, double, 16>( bench, "backend 16D 8k boost rtree", pts16, 16, nt );
+#endif
+	}
 
 	std::ofstream csv( "optics_perf.csv" );
 	bench.render( ankerl::nanobench::templates::csv(), csv );

@@ -77,16 +77,22 @@ neighborhoods *and* separates color modes), and/or reduce `--max-dim`. The CSV
 round-trip in this example is **not** the bottleneck (tens of ms); the algorithm
 on dense data is.
 
+Since v0.9.1 the library defaults to **OnDemand** neighbor acquisition, which on these
+dense color clouds keeps memory flat (no giant neighbor cache — Precompute would need
+~19 GB at 100k px) *and* runs ~30% faster, so the cost above is **time, not memory**.
+The full size/mode/backend analysis is in [`perf/README.md`](../../perf/README.md).
+
 `compare_kmeans.py` times the OPTICS ordering against scikit-learn k-means (told
-the cluster count OPTICS found) on the same pixels:
+the cluster count OPTICS found) on the same pixels (needs `pip install scikit-learn`):
 
 ```sh
 python examples/color_clustering/compare_kmeans.py <image> \
     --exe build/examples/Release/optics_color.exe --max-dim 240 --eps 3 ...
 ```
 
-Observed (these images, ~40–50k px): a single k-means fit is ~35–50 ms regardless
-of parameters, while OPTICS ranges from ~0.3 s (small `eps`) to 10–25 s (large
-`eps`, dense background). k-means is faster and runtime-stable but needs `k` and
-force-assigns every pixel; OPTICS finds `k` itself and separates noise/edge
-colors. Needs `pip install scikit-learn`.
+The headline for color is that **k-means is much cheaper per run** (no neighbor graph)
+and runtime-stable, but needs `k` and force-assigns every pixel; OPTICS finds `k`
+itself and separates noise/edge colors, at a cost that swings with `eps` and the
+neighborhood sizes above. For the full, careful runtime picture — this library's
+backends vs scikit-learn OPTICS/DBSCAN/k-means, across image sizes (800 → 100 000 px)
+and the O(n²) dense-neighborhood wall — see **[`perf/README.md`](../../perf/README.md)**.

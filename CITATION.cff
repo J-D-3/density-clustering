@@ -1,0 +1,34 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite both the OPTICS algorithm and this implementation."
+title: "OPTICS-Clustering"
+abstract: "A header-only C++20 implementation of the OPTICS density-based clustering algorithm (Ankerst et al., 1999)."
+type: software
+authors:
+  - family-names: Proff
+    given-names: Ingo
+url: "https://github.com/J-D-3/OPTICS-Clustering"
+repository-code: "https://github.com/J-D-3/OPTICS-Clustering"
+license: MIT
+keywords:
+  - clustering
+  - OPTICS
+  - DBSCAN
+  - density-based clustering
+  - reachability
+  - "C++"
+references:
+  - type: conference-paper
+    title: "OPTICS: Ordering Points To Identify the Clustering Structure"
+    year: 1999
+    doi: "10.1145/304182.304187"
+    collection-title: "Proceedings of the 1999 ACM SIGMOD International Conference on Management of Data (SIGMOD '99)"
+    pages: "49-60"
+    authors:
+      - family-names: Ankerst
+        given-names: Mihael
+      - family-names: Breunig
+        given-names: "Markus M."
+      - family-names: Kriegel
+        given-names: Hans-Peter
+      - family-names: Sander
+        given-names: "Jörg"

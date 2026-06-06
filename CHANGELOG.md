@@ -4,6 +4,59 @@ All notable changes to OPTICS-Clustering are documented here. The format is base
 on [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased] — 0.9.1
+
+Focus: make the v0.9.0 core **adoptable** — a fast first run on your own data, an honest
+comparison to other algorithms, independent validation, and backend/perf hardening. See
+`docs/ROADMAP-0.9.1.md` (GitHub milestone V0.9.1).
+
+### Added
+- `CoreDistMode::Knn` — a k-NN core-distance path (new `core_dist_mode` argument of
+  `compute_reachability_dists`, default `Scan`) that avoids scanning huge eps-neighborhoods
+  on dense clouds (~27% faster end-to-end on a flat-color-like cloud) with identical
+  results. Backends opt in via the `KnnCoreDist` concept (#24).
+- `ApproxNanoflannBackend` — eps-approximate nearest-neighbor backend for the
+  high-dimensional regime; `NanoflannBackend` gained a compile-time approximation knob
+  (0 = exact, the default) (#28).
+- `examples/cluster_csv` — a generic "cluster your own CSV" example (2/3/4/16-D) writing
+  labeled-points + reachability CSVs for `tools/visualize.py` (#25).
+- Python tooling: `tools/datasets.py` (reproducible 2-D datasets, incl. a varying-density
+  case), `compare_algorithms.py` (OPTICS vs k-means vs DBSCAN figure, with the
+  different-density case OPTICS wins via Xi), `validate_sklearn.py` (cross-check against
+  scikit-learn OPTICS), `timing_compare.py` + the `optics_backend_compare` harness
+  (this library is ~100–800× faster than scikit-learn OPTICS across the internal
+  backends), `requirements.txt`, and one-command `scripts/demo.{ps1,sh}`.
+- Timing harnesses default to **4 worker threads** (override with `OPTICS_BENCH_THREADS`)
+  for reproducible numbers; `cluster_csv` gained `xi_chi` (hierarchical extraction) and
+  `n_threads` arguments.
+- `optics_py` — optional pybind11 binding for 1/2/3/4-D NumPy clouds
+  (`OPTICS_BUILD_PYTHON`, off by default) (#23).
+- README: an honest OPTICS-vs-k-means-vs-DBSCAN comparison, a "run on your own data"
+  quickstart, and guides for reading the reachability plot and choosing parameters, with
+  committed figures (#29, #30).
+- `CITATION.cff`, a Doxygen `docs` target, and an ASan/UBSan CI job; warnings-as-errors on
+  the MSVC CI job (`OPTICS_WARNINGS_AS_ERRORS`) (#34).
+- Perf harness: dense-neighborhood (Scan vs Knn) and backend-comparison scenarios; baseline
+  refreshed (#26).
+- Real-image color-clustering runtime analysis (`tools/timing_images.py`) and three new
+  benchmark harnesses: `optics_approx_probe` (approximate-backend recall vs eps/dimension),
+  `optics_mode_compare` (Precompute vs OnDemand time + memory), and the scaling-by-sample-size
+  study — documented in `perf/README.md`, including *why the approximate backend helps only in
+  high dimensions* and the dense-neighborhood O(n²) memory wall.
+
+### Changed
+- **`compute_reachability_dists` and `cluster_dbscan` now default to `NeighborMode::OnDemand`**
+  (was `Precompute`). OnDemand uses O(one neighborhood) memory instead of O(n × avg_neighbors), so
+  it never OOMs on dense data and is ~30% faster there; Precompute (faster on sparse/low-density
+  clouds) is now opt-in. Results are identical; only the time/memory profile changes. `cluster_csv`
+  selects Precompute when `n_threads > 1`.
+
+### Fixed
+- Backend equivalence is now asserted end-to-end (nanoflann ↔ Boost produce identical
+  orderings), not just matching neighbor sets (#27).
+- A discarded nanoflann `radiusSearch` return and a shadowed test variable (clean under
+  warnings-as-errors); vendored nanoflann is included with its warnings suppressed.
+
 ## [0.9.0] — 2026-06-05
 
 First modernized release: a fast, dependency-free, cross-platform C++20 library.

@@ -1,8 +1,14 @@
 # Warnings on for all test targets. The visual test still verifies via assert(),
 # so it also needs NDEBUG undefined in optimized configs.
+option(OPTICS_WARNINGS_AS_ERRORS "Treat compiler warnings as errors in the test build" OFF)
 set(OPTICS_WARN_OPTIONS
     $<$<CXX_COMPILER_ID:MSVC>:/W4>
     $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra>)
+if(OPTICS_WARNINGS_AS_ERRORS)
+    list(APPEND OPTICS_WARN_OPTIONS
+        $<$<CXX_COMPILER_ID:MSVC>:/WX>
+        $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Werror>)
+endif()
 set(OPTICS_ASSERT_OPTIONS
     $<$<CXX_COMPILER_ID:MSVC>:/UNDEBUG>
     $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-UNDEBUG>)
@@ -40,3 +46,18 @@ target_include_directories(optics_perf SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DI
 # Large-scale (1e6-1e7) 3D timing harness. Release config; not a ctest.
 add_executable(optics_scale Benchmark/scale.cpp)
 target_link_libraries(optics_scale PRIVATE optics::optics)
+
+# Per-backend timing over CSV clouds (paired with tools/timing_compare.py, which adds
+# scikit-learn OPTICS). Release config; not a ctest.
+add_executable(optics_backend_compare Benchmark/backend_compare.cpp)
+target_link_libraries(optics_backend_compare PRIVATE optics::optics)
+
+# Approximate-backend probe: recall vs eps level and dimension (explains when the
+# approximate backend can/can't beat exact). Release config; not a ctest.
+add_executable(optics_approx_probe Benchmark/approx_probe.cpp)
+target_link_libraries(optics_approx_probe PRIVATE optics::optics)
+
+# Precompute vs OnDemand neighbor-acquisition timing + memory (OnDemand scales past the
+# Precompute memory wall). Release config; not a ctest.
+add_executable(optics_mode_compare Benchmark/mode_compare.cpp)
+target_link_libraries(optics_mode_compare PRIVATE optics::optics)

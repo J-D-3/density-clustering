@@ -19,7 +19,7 @@ import time
 
 import numpy as np
 from PIL import Image
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, DBSCAN
 
 
 def main(argv=None):
@@ -68,8 +68,22 @@ def main(argv=None):
     km10_ms = time_kmeans(10, reps=2)  # the scikit-learn default (10 restarts)
     print(f"k-means : k={k} given;  fit (1 run) = {km1_ms:8.1f} ms   (n_init=10) = {km10_ms:8.1f} ms")
 
+    # --- DBSCAN (scikit-learn), the closest relative of the OPTICS threshold cut --
+    # A single global eps (here the same threshold OPTICS was cut at); finds k itself
+    # and labels low-density pixels as noise, like OPTICS but without the ordering.
+    DBSCAN(eps=args.threshold, min_samples=args.min_pts).fit(pixels[:1000])  # warm up
+    t = time.perf_counter()
+    db = DBSCAN(eps=args.threshold, min_samples=args.min_pts).fit(pixels)
+    db_ms = (time.perf_counter() - t) * 1000.0
+    db_k = len(set(db.labels_.tolist()) - {-1})
+    db_noise = int((db.labels_ < 0).sum())
+    print(f"DBSCAN  : eps={args.threshold} given;  found k={db_k}, {db_noise} noise px;  fit = {db_ms:8.1f} ms")
+
     print(f"\nratio OPTICS / k-means(n_init=1)  = {optics_ms / km1_ms:.2f}x")
     print(f"ratio OPTICS / k-means(n_init=10) = {optics_ms / km10_ms:.2f}x")
+    print(f"ratio OPTICS / DBSCAN             = {optics_ms / db_ms:.2f}x")
+    print("\nk-means is fastest but needs k and ignores noise/shape; DBSCAN finds k and noise "
+          "at one global eps; OPTICS finds structure across densities and exposes the hierarchy.")
     return 0
 
 
