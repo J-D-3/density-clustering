@@ -36,6 +36,19 @@ if(OPTICS_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
 
+# Optional API documentation. `cmake --build <dir> --target docs` when Doxygen is
+# installed; a no-op target otherwise so the call never fails.
+if(PROJECT_IS_TOP_LEVEL)
+    find_package(Doxygen QUIET)
+    if(DOXYGEN_FOUND)
+        add_custom_target(docs
+            COMMAND ${DOXYGEN_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/Doxyfile
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            COMMENT "Generating API documentation with Doxygen"
+            VERBATIM)
+    endif()
+endif()
+
 # Install + package config so downstream can `find_package(optics)` or FetchContent.
 if(OPTICS_INSTALL)
     include(CMakePackageConfigHelpers)

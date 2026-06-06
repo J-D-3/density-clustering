@@ -11,7 +11,15 @@
 #include <optional>
 #include <vector>
 
+// nanoflann is vendored third-party; silence its warnings (e.g. MSVC C4324/C4127)
+// so the project can build warnings-as-errors without modifying the vendored header.
+#if defined(_MSC_VER)
+#  pragma warning(push, 0)
+#endif
 #include "nanoflann.hpp"
+#if defined(_MSC_VER)
+#  pragma warning(pop)
+#endif
 
 namespace optics {
 
@@ -99,7 +107,7 @@ public:
         nanoflann::SearchParameters params;
         params.sorted = false;
         params.eps = search_eps;
-        index_.radiusSearch(p.data(), radius_sq, matches, params);
+        (void)index_.radiusSearch(p.data(), radius_sq, matches, params);  // count unused
         out.reserve(out.size() + matches.size());
         for (const auto& m : matches) out.push_back(m.first);
     }

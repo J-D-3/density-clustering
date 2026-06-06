@@ -16,17 +16,20 @@ jobs:
           - name: Linux GCC
             os: ubuntu-latest
             preset: linux-gcc
+            werror: "OFF"
           - name: Linux Clang
             os: ubuntu-latest
             preset: linux-clang
+            werror: "OFF"
           - name: Windows MSVC
             os: windows-latest
             preset: msvc
+            werror: "ON"
     steps:
       - uses: actions/checkout@v4
 
       - name: Configure
-        run: cmake --preset ${{ matrix.preset }}
+        run: cmake --preset ${{ matrix.preset }} -DOPTICS_WARNINGS_AS_ERRORS=${{ matrix.werror }}
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
@@ -51,3 +54,25 @@ jobs:
 
       - name: Test
         run: ctest --preset linux-gcc
+
+  sanitizers:
+    name: Linux Clang ASan+UBSan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (ASan + UBSan)
+        run: >
+          cmake -S . -B build-san -G "Unix Makefiles"
+          -DCMAKE_CXX_COMPILER=clang++
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer"
+
+      - name: Build
+        run: cmake --build build-san
+
+      - name: Test (sanitizers halt on first error)
+        run: ctest --test-dir build-san --output-on-failure
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1

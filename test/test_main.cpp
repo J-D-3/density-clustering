@@ -552,8 +552,8 @@ TEST_CASE("tree_tests") {
 		auto& root = T.get_root();
 		root.add_children( std::vector<Node>( { Node( {1,1} ), Node( {1,2} ), Node( {1,3} ) } ) );
 		std::size_t idx = 1;
-		for ( auto& n : root.get_children() ) {
-			n.add_child( Node( { 2, idx++ } ) );
+		for ( auto& child : root.get_children() ) {
+			child.add_child( Node( { 2, idx++ } ) );
 		}
 		auto c = T.flatten();
 	}

@@ -1,0 +1,19 @@
+# Minimal Doxygen config for the OPTICS-Clustering public API. Unset tags use
+# Doxygen defaults. Build with:  cmake --build build --target docs  (needs Doxygen),
+# or directly:  doxygen Doxyfile
+PROJECT_NAME           = "OPTICS-Clustering"
+PROJECT_BRIEF          = "Header-only C++20 OPTICS density-based clustering"
+OUTPUT_DIRECTORY       = docs/api
+INPUT                  = include/optics README.md
+USE_MDFILE_AS_MAINPAGE = README.md
+FILE_PATTERNS          = *.hpp
+RECURSIVE              = YES
+# Skip the vendored third-party headers.
+EXCLUDE                = include/optics/nanoflann.hpp
+EXTRACT_ALL            = YES
+EXTRACT_STATIC         = YES
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+QUIET                  = YES
+WARN_IF_UNDOCUMENTED   = NO
+JAVADOC_AUTOBRIEF      = YES

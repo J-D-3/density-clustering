@@ -1,8 +1,14 @@
 # Warnings on for all test targets. The visual test still verifies via assert(),
 # so it also needs NDEBUG undefined in optimized configs.
+option(OPTICS_WARNINGS_AS_ERRORS "Treat compiler warnings as errors in the test build" OFF)
 set(OPTICS_WARN_OPTIONS
     $<$<CXX_COMPILER_ID:MSVC>:/W4>
     $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra>)
+if(OPTICS_WARNINGS_AS_ERRORS)
+    list(APPEND OPTICS_WARN_OPTIONS
+        $<$<CXX_COMPILER_ID:MSVC>:/WX>
+        $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Werror>)
+endif()
 set(OPTICS_ASSERT_OPTIONS
     $<$<CXX_COMPILER_ID:MSVC>:/UNDEBUG>
     $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-UNDEBUG>)

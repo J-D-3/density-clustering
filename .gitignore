@@ -48,7 +48,11 @@ reachdists.bmp
 /Release
 
 build
+build-*/
 dependencies
+
+# Generated API docs (Doxygen)
+docs/api/
 
 # Python tooling
 __pycache__/
