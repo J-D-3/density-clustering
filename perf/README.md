@@ -73,19 +73,27 @@ not the surrounding bookkeeping.
 
 Runtime of color clustering (RGB in 3-D) on three standard test images, 8000 pixels sampled per
 image into the *same* cloud for every method (so scikit-learn's OPTICS stays tractable),
-`min_pts=10`, our backends at 4 threads:
+`min_pts=10`, our backends at 4 threads. k-means is shown at both `n_init=1` (one Lloyd run) and
+`n_init=10` (its quality default):
 
-| image (8000 px) | nanoflann | nf-approx | boost-rtree | sklearn-OPTICS | sklearn-DBSCAN | sklearn-KMeans |
-|-----------------|-----------|-----------|-------------|----------------|----------------|----------------|
-| airplane        | 204 ms    | 193 ms    | 255 ms      | 5169 ms        | 144 ms         | 1934 ms        |
-| fruits          |  44 ms    |  43 ms    |  53 ms      | 4450 ms        |  39 ms         |  509 ms        |
-| parrot          | 142 ms    | 141 ms    | 302 ms      | 4607 ms        | 151 ms         |  264 ms        |
+| image (8000 px) | nanoflann | nf-approx | boost-rtree | sklearn-OPTICS | sklearn-DBSCAN | kmeans(1) | kmeans(10) |
+|-----------------|-----------|-----------|-------------|----------------|----------------|-----------|------------|
+| airplane        | 247 ms    | 200 ms    | 253 ms      | 5005 ms        | 153 ms         | 109 ms    | 660 ms     |
+| fruits          |  44 ms    |  46 ms    |  52 ms      | 4526 ms        |  39 ms         |  29 ms    | 361 ms     |
+| parrot          | 146 ms    | 140 ms    | 334 ms      | 4660 ms        | 147 ms         |  20 ms    | 292 ms     |
 
-Takeaways: our OPTICS ordering is **~25–100× faster than scikit-learn's OPTICS** on the identical
-cloud, and lands in the *same band as scikit-learn's DBSCAN* despite computing the full
-cluster-ordering + hierarchy (not just flat labels). The approximate backend matches exact in 3-D
-(its payoff is in high dimensions); Boost's R\*-tree trails nanoflann. The gap vs scikit-learn
-OPTICS widens with the pixel budget. Reproduce:
+Takeaways:
+- vs **scikit-learn's OPTICS** (same algorithm): our ordering is **~20–100× faster** on the
+  identical cloud; the gap widens with the pixel budget.
+- **k-means is the cheapest per run** — it has no neighbor graph, just Lloyd iterations. A single
+  run (`kmeans(1)`) is often faster than our OPTICS (e.g. parrot 20 ms vs 146 ms). OPTICS's value
+  over k-means is *what it computes* (automatic cluster count, noise, arbitrary shapes, the full
+  hierarchy), **not speed**. k-means's quality default `n_init=10` does 10 restarts and is the
+  slower bar.
+- Our OPTICS sits in scikit-learn's **DBSCAN** band while computing the full ordering + hierarchy,
+  not just flat labels.
+- The approximate backend matches exact in 3-D (its payoff is in high dimensions); Boost's
+  R\*-tree trails nanoflann. Reproduce:
 
 ```sh
 # harness built with -DOPTICS_ENABLE_BOOST_RTREE=ON to include the Boost row

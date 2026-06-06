@@ -25,6 +25,7 @@ import os
 import subprocess
 import sys
 import time
+import warnings
 
 import numpy as np
 from PIL import Image
@@ -86,6 +87,7 @@ def main(argv=None):
     p.add_argument("--data-dir", default="data")
     p.add_argument("--plot", default=None)
     args = p.parse_args(argv)
+    warnings.filterwarnings("ignore")  # sklearn OPTICS warns on duplicate-color zero reachability
 
     exe = os.path.abspath(args.exe)
     if not os.path.isfile(exe):
@@ -104,17 +106,28 @@ def main(argv=None):
     paths = [c[1] for c in cases]
     internal = time_internal(exe, paths, args.min_pts)
     backends = sorted({b for (_, b) in internal})  # nanoflann, nf-approx, [boost-rtree]
-    methods = backends + ["sklearn-OPTICS", "sklearn-DBSCAN", "sklearn-KMeans"]
+
+    # scikit-learn estimators. k-means is shown at BOTH n_init=1 (one Lloyd run, the
+    # fast single-shot) and n_init=10 (its quality default, ~10x the work) so the
+    # comparison is not skewed for or against it -- k-means has no neighbor graph and
+    # is the cheapest per run.
+    def estimators(mp):
+        return {
+            "sklearn-OPTICS": lambda Z: OPTICS(min_samples=mp).fit(Z),
+            "sklearn-DBSCAN": lambda Z: DBSCAN(eps=DBSCAN_EPS, min_samples=mp).fit(Z),
+            "kmeans(1)":      lambda Z: KMeans(n_clusters=KMEANS_K, n_init=1, random_state=0).fit(Z),
+            "kmeans(10)":     lambda Z: KMeans(n_clusters=KMEANS_K, n_init=10, random_state=0).fit(Z),
+        }
+    sk_methods = list(estimators(args.min_pts).keys())
+    methods = backends + sk_methods
 
     rows = []
     for label, path, n in cases:
         X = load_csv(path)
         t = {b: internal.get((path, b), float("nan")) for b in backends}
-        # warm up, then time each scikit-learn estimator on the same cloud
-        OPTICS(min_samples=args.min_pts).fit(X[:200])
-        t["sklearn-OPTICS"] = timed(lambda: OPTICS(min_samples=args.min_pts).fit(X))
-        t["sklearn-DBSCAN"] = timed(lambda: DBSCAN(eps=DBSCAN_EPS, min_samples=args.min_pts).fit(X))
-        t["sklearn-KMeans"] = timed(lambda: KMeans(n_clusters=KMEANS_K, n_init=10, random_state=0).fit(X))
+        for name, fit in estimators(args.min_pts).items():
+            fit(X[:200])                       # warm up this estimator's own code path
+            t[name] = timed(lambda fit=fit: fit(X))
         rows.append((label, n, t))
 
     head = f"{'image':10s} {'n':>6s} " + " ".join(f"{m:>15s}" for m in methods)
@@ -123,7 +136,9 @@ def main(argv=None):
     for label, n, t in rows:
         print(f"{label:10s} {n:6d} " + " ".join(f"{t[m]:15.1f}" for m in methods))
     print("\n(ms; lower is better. Internal backends @ 4 threads; scikit-learn single-process.")
-    print(f" Same sampled RGB cloud per image. min_pts={args.min_pts}, DBSCAN eps={DBSCAN_EPS}, KMeans k={KMEANS_K}.)")
+    print(f" Same sampled RGB cloud per image. min_pts={args.min_pts}, DBSCAN eps={DBSCAN_EPS}, KMeans k={KMEANS_K}.")
+    print(" k-means has no neighbor graph and is the cheapest per run; kmeans(1) is one Lloyd run,")
+    print(" kmeans(10) is its quality default. Our value vs k-means is the auto-found k + noise, not speed.)")
 
     if args.plot:
         import matplotlib
