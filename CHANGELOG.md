@@ -4,7 +4,9 @@ All notable changes to OPTICS-Clustering are documented here. The format is base
 on [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased] — 0.9.1
+## [Unreleased]
+
+## [0.9.1] — 2026-06-06
 
 Focus: make the v0.9.0 core **adoptable** — a fast first run on your own data, an honest
 comparison to other algorithms, independent validation, and backend/perf hardening. See
