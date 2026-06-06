@@ -18,67 +18,17 @@
 #include <optics/Stopwatch.hpp>
 
 #include "bench_config.hpp"
+#include "csv_points.hpp"
 
 #include <array>
-#include <cctype>
 #include <cstddef>
-#include <fstream>
 #include <iostream>
-#include <sstream>
 #include <string>
 #include <vector>
 
 namespace sw = stopwatch;
 
 namespace {
-
-bool is_number( const std::string& s ) {
-	if ( s.empty() ) { return false; }
-	try { std::size_t n = 0; (void)std::stod( s, &n ); return n == s.size(); }
-	catch ( ... ) { return false; }
-}
-
-// Read a coordinates CSV (header x0,x1,...) into a flat row-major buffer; sets dim.
-bool read_csv( const std::string& path, std::vector<double>& flat, std::size_t& n, std::size_t& dim ) {
-	std::ifstream in( path );
-	if ( !in ) { return false; }
-	flat.clear();
-	n = 0;
-	dim = 0;
-	std::string line;
-	if ( std::getline( in, line ) ) {
-		std::vector<std::string> tok;
-		std::stringstream ss( line );
-		std::string t;
-		while ( std::getline( ss, t, ',' ) ) { tok.push_back( t ); }
-		bool header = false;
-		for ( const auto& x : tok ) { if ( !is_number( x ) ) { header = true; break; } }
-		if ( header ) {
-			for ( const auto& x : tok ) { if ( !x.empty() && x[0] == 'x' ) { ++dim; } }
-			if ( dim == 0 ) { dim = tok.size(); }
-		} else {
-			dim = tok.size();
-			for ( std::size_t d = 0; d < dim; ++d ) { flat.push_back( std::stod( tok[d] ) ); }
-			++n;
-		}
-	}
-	while ( std::getline( in, line ) ) {
-		if ( line.empty() ) { continue; }
-		std::vector<std::string> tok;
-		std::stringstream ss( line );
-		std::string t;
-		while ( std::getline( ss, t, ',' ) ) { tok.push_back( t ); }
-		if ( tok.size() < dim ) { continue; }
-		bool ok = true;
-		const std::size_t base = flat.size();
-		for ( std::size_t d = 0; d < dim; ++d ) {
-			if ( !is_number( tok[d] ) ) { ok = false; break; }
-			flat.push_back( std::stod( tok[d] ) );
-		}
-		if ( ok ) { ++n; } else { flat.resize( base ); }
-	}
-	return dim > 0 && n > 0;
-}
 
 template <class Backend, std::size_t Dim>
 void time_backend( const std::string& dataset, const std::string& backend,
@@ -94,10 +44,7 @@ void time_backend( const std::string& dataset, const std::string& backend,
 template <std::size_t Dim>
 void run_all_backends( const std::string& dataset, const std::vector<double>& flat,
 					   std::size_t n, std::size_t min_pts, unsigned nt ) {
-	std::vector<std::array<double, Dim>> pts( n );
-	for ( std::size_t i = 0; i < n; ++i ) {
-		for ( std::size_t d = 0; d < Dim; ++d ) { pts[i][d] = flat[i * Dim + d]; }
-	}
+	const auto pts = bench::pack<Dim>( flat, n );
 	time_backend<optics::NanoflannBackend<double, Dim>, Dim>( dataset, "nanoflann", pts, min_pts, nt );
 	time_backend<optics::ApproxNanoflannBackend<double, Dim>, Dim>( dataset, "nf-approx", pts, min_pts, nt );
 #ifdef OPTICS_ENABLE_BOOST_RTREE
@@ -126,7 +73,7 @@ int main( int argc, char** argv ) {
 	for ( const auto& path : paths ) {
 		std::vector<double> flat;
 		std::size_t n = 0, dim = 0;
-		if ( !read_csv( path, flat, n, dim ) ) { std::cerr << "skip (unreadable): " << path << "\n"; continue; }
+		if ( !bench::read_csv( path, flat, n, dim ) ) { std::cerr << "skip (unreadable): " << path << "\n"; continue; }
 		switch ( dim ) {
 			case 2:  run_all_backends<2>( path, flat, n, min_pts, nt ); break;
 			case 3:  run_all_backends<3>( path, flat, n, min_pts, nt ); break;

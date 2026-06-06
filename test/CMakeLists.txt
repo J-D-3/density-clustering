@@ -51,3 +51,8 @@ target_link_libraries(optics_scale PRIVATE optics::optics)
 # scikit-learn OPTICS). Release config; not a ctest.
 add_executable(optics_backend_compare Benchmark/backend_compare.cpp)
 target_link_libraries(optics_backend_compare PRIVATE optics::optics)
+
+# Approximate-backend probe: recall vs eps level and dimension (explains when the
+# approximate backend can/can't beat exact). Release config; not a ctest.
+add_executable(optics_approx_probe Benchmark/approx_probe.cpp)
+target_link_libraries(optics_approx_probe PRIVATE optics::optics)

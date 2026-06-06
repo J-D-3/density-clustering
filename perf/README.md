@@ -102,3 +102,79 @@ python tools/timing_images.py --exe build-boost/test/Release/optics_backend_comp
 ```
 
 ![Color-clustering runtime on RGB images](../docs/img/timing_images.png)
+
+### Scaling with sample size (3-D color, auto-ε)
+
+`parrot.ppm` sampled at increasing pixel counts, `min_pts=10`, our backends @ 4 threads. With
+auto-ε the **average neighborhood grows with n** (a denser color space), so every density method
+is effectively ~O(n²) here, and Precompute memory is ~O(n²) too:
+
+| n (px)   | avg neighbors | nanoflann | approx(0.1) | sklearn-OPTICS | sklearn-DBSCAN | kmeans(1) |
+|----------|---------------|-----------|-------------|----------------|----------------|-----------|
+| 800      | 203           | 3 ms      | 2 ms        | 478 ms         | 6 ms           | 11 ms     |
+| 8 000    | 1 962         | 142 ms    | 141 ms      | 5 405 ms       | 205 ms         | 18 ms     |
+| 80 000   | 19 258        | 18 514 ms | 19 535 ms   | *(skipped)*    | 25 478 ms      | 63 ms     |
+| 400 000  | ~96 000\*     | *infeasible†* | —       | —              | *(very slow)*  | 235 ms    |
+
+\* extrapolated from the linear `avg_nbrs`-vs-n trend.  † the Precompute neighbor lists alone would
+need ≈ n × avg_nbrs × 8 B ≈ **300 GB**.
+
+- The average neighborhood grows ~linearly with n, so our OPTICS, scikit-learn's OPTICS, and
+  scikit-learn's DBSCAN are all ~**O(n²)** in this regime (at 80 k, OPTICS and DBSCAN are both tens
+  of seconds). Our OPTICS stays ~40–160× faster than scikit-learn's OPTICS and competitive with its
+  DBSCAN, but the asymptotics are identical.
+- **k-means is the only near-linear method** and the only one that scales to 400 k px comfortably.
+- For large color clouds, use a **smaller ε** (tighter color clusters), **OnDemand** mode (lean
+  memory, avoids the O(n²) buffer), or **downsample** — not a different backend (see below).
+
+### Why the approximate backend rarely beats exact (`optics_approx_probe`)
+
+`optics_approx_probe` reports, per cloud, the exact and approximate ordering time plus the
+**neighbor recall** (the fraction of the exact ε-neighbors the approximate search still returns).
+Recall ≈ 1.0 means the approximate search did the *same work*, so it cannot be faster:
+
+3-D color (`parrot`, 8 000 px, avg neighbors ≈ 1 962):
+
+| backend        | order | recall |
+|----------------|-------|--------|
+| exact          | 142 ms | 1.000 |
+| approx ε=0.1   | 141 ms | 0.997 |
+| approx ε=0.5   | 145 ms | 0.966 |
+| approx ε=1.0   | 140 ms | 0.931 |
+
+16-D uniform (8 000 pts, avg neighbors ≈ 2):
+
+| backend        | order | recall |
+|----------------|-------|--------|
+| exact          | 104 ms | 1.000 |
+| approx ε=0.1   |  93 ms | 1.000 |
+| approx ε=0.5   |  71 ms | 1.000 |
+| approx ε=1.0   |  44 ms | 1.000 |
+
+Two independent reasons the approximate backend doesn't help on 3-D color, and one regime where it
+does:
+
+1. **Low dimension prunes almost nothing.** nanoflann's ε-approximation skips KD-tree branches whose
+   nearest corner is within a thin shell of the query radius. In 3-D that shell is a negligible
+   slice of the tree, so even ε=1.0 still returns 93–100% of neighbors (recall barely drops) — there
+   is nothing to save, and the extra pruning check can even make it marginally *slower*.
+2. **3-D color is neighborhood-bound, not search-bound.** With huge neighborhoods (≈2 000 at 8 k,
+   ≈19 000 at 80 k), the time is dominated by *processing* each neighborhood — `compute_core_dist`'s
+   scan and the relax loop, both O(|neighbors|) — which **no neighbor-search backend touches**. The
+   query is a small slice of the total.
+3. **High dimension is search-bound, and there approx wins.** In 16-D the neighborhoods are tiny
+   (≈2) so the *tree traversal* dominates; the curse of dimensionality makes exact search visit many
+   nodes, and ε-pruning cuts that traversal — **2.4× at ε=1.0** — while still returning every real
+   neighbor (recall 1.0). This is exactly the 16-D regime `ApproxNanoflannBackend` was built for.
+
+So the approximate backend is a **high-dimensional, search-bound** tool. Its default ε (0.1) is
+conservative; raise `ApproxEpsPermille` (e.g. 500–1000) to trade recall for speed where the search —
+not the neighborhood processing — is the bottleneck.
+
+Reproduce (any numeric CSV with an `x0,x1,...` header; a 3-D color cloud and a 16-D cloud show the
+contrast):
+
+```sh
+cmake --build build --config Release --target optics_approx_probe
+./build/test/Release/optics_approx_probe color3d.csv uniform16d.csv 10
+```
