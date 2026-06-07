@@ -12,6 +12,8 @@ For project history and direction: `CHANGELOG.md` (release notes, current versio
 
 For algorithm research and future direction: `documentation/` holds papers + `references.md` for the planned **sOPTICS** (sDBSCAN/sOPTICS, random-projection OPTICS — GitHub issue #50). The 1.0.0 milestone tracks the bigger algorithm/benchmark work: sOPTICS (#50), HDBSCAN\* (#52), CPU-speed comparisons vs ELKI/dbscan/sDbscan (#53), an ARI/NMI/Rand quality harness (#54), and non-Euclidean metrics (#51). Original OPTICS/FOPTICS papers live in `background/`.
 
+Before tagging 1.0.0, one large reproducible study (the **benchmark matrix**) picks the library's data-dependent defaults (backend by dimensionality, sOPTICS-vs-OPTICS, neighbor mode/backend, epsilon estimator) and becomes the citable performance reference. Its design — axes, the tiered/fractional reduction, which existing harnesses feed it, comparability rules — is in `docs/ROADMAP-1.0.0-benchmark-matrix.md`.
+
 ## Build & test
 
 Requires a C++20 compiler (MSVC 2022, GCC 10+, or Clang 13+) and CMake ≥ 3.21. Use the presets:
