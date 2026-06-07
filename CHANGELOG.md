@@ -6,6 +6,32 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
 
 ## [Unreleased]
 
+## [0.9.2] — 2026-06-07
+
+Focus: usability and hardening on the road to 1.0 — smarter parameters, safer memory, and broader
+test/CI coverage. See `docs/ROADMAP-post-0.9.1.md` (GitHub milestone 0.9.2).
+
+### Added
+- `optics::epsilon_estimation_knee` — an opt-in k-distance-knee (classic DBSCAN) epsilon estimator
+  that avoids the uniform-density over-estimate of `epsilon_estimation` on clustered data. Reuses the
+  backend k-NN path; the default auto-epsilon is unchanged (#41).
+- `optics::chi_tree_to_points` — maps a Xi `cluster_tree` onto the same shape with each node holding
+  its list of original point indices, **preserving nesting**, so a hierarchy is as easy to consume as
+  the flattened `extract_xi` (#36).
+- Precompute pre-allocation guard: an optional `max_precompute_bytes` argument to
+  `compute_reachability_dists` estimates the neighbor cache from a small sample and throws (suggesting
+  `OnDemand`) before an oversized allocation. Default `0` = no check; `OnDemand` is unaffected (#37).
+- `OPTICS_PROFILE` compile flag — prints a per-phase timing breakdown (index build / precompute /
+  core_dist / relax / loop) to stderr after each `compute_reachability_dists` call. Off by default ⇒
+  zero overhead and no call-site `#ifdef` (`include/optics/detail/profile.hpp`) (#42).
+- Tests: property/fuzz invariants over random clouds (written generically over the `reachability_dist`
+  contract so approximate variants can reuse them) (#44); a cross-backend consistency test
+  (nanoflann / approximate / Boost) (#43); a deterministic memory-footprint invariant — Precompute
+  cache grows with n while OnDemand stays bounded (#45); and a `min_cluster_frac` × Xi size-filter
+  case (#39).
+- `examples/shared/csv_io.hpp` — a single CSV reader shared by both example programs, replacing the
+  hand-rolled parsing each carried (#38).
+
 ### Changed
 - **Renamed `cluster_dbscan` → `cluster_threshold`** (C++ and the Python binding): the flat cut is
   the OPTICS paper's *ExtractDBSCAN* (the same clustering DBSCAN gives at `eps = threshold`), not a
@@ -16,6 +42,11 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
   percentile of the reachabilities); `chi` defaults to `0.05`.
 - Runtime-millisecond outputs (examples, benchmarks, timing scripts) now round **up** to the next
   whole millisecond.
+
+### Fixed
+- Configuring with `-DOPTICS_ENABLE_BOOST_RTREE=ON` no longer emits the CMake `CMP0167` deprecation
+  warning: the policy is set to `NEW` (consume `BoostConfig`) and the header-only `Boost::headers`
+  target is linked instead of the FindBoost-only `Boost::boost` (#35).
 
 ## [0.9.1] — 2026-06-06
 

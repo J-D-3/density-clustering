@@ -5,6 +5,15 @@ what the 0.9.1 performance work actually measured (see `perf/README.md`). Nothin
 committed scope; it is a menu for 0.9.2 / the road to a stable **1.0.0**. Priority tags:
 **[P1]** soon / high value, **[P2]** valuable, **[P3]** opportunistic / research.
 
+> **Delivered in 0.9.2** (milestone #3): smarter k-distance-knee epsilon (#41, §1), Precompute
+> pre-allocation guard (#37, §1/§5), the `OPTICS_PROFILE` phase profiler re-added (#42, §4 — the
+> stale `perf-dense` branch is now retired), `chi_tree_to_points` (#36, §4), property/fuzz invariant
+> tests (#44, §3), a cross-backend consistency test (#43, §3), a deterministic memory-footprint
+> invariant (#45, §3), the `min_cluster_frac` × Xi test (#39, §4), the shared example CSV reader
+> (#38, §4), and the CMake `CMP0167` Boost fix (#35, §4). The big 1.0-gating items below
+> (weighted/unique points, HNSW, perf-regression gate, API freeze, sOPTICS) are tracked under the
+> **1.0.0** milestone (#4).
+
 ---
 
 ## 1. Getting clever with dense neighborhoods
