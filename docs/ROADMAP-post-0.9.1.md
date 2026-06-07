@@ -88,6 +88,11 @@ work per neighborhood**, not faster NN:
 - **[P3] 400k+ never measured to completion** — Precompute OOMs (~300 GB projected) and OnDemand at
   400k would take ~9 min; only 200k OnDemand was run. Capture a 400k OnDemand point if a scaling
   curve to that size is wanted.
+- **[P2] `chi_tree_to_points(tree, reach)` helper.** `get_chi_clusters` returns cluster trees whose
+  nodes hold `(begin,end)` ranges into the ordering; turning a node (or a whole tree) into point-index
+  lists currently requires the caller to map `reach[i].point_index` by hand. Add a convenience that
+  walks a `cluster_tree` and returns per-node point indices *preserving the nesting*, so the
+  hierarchy is as easy to consume as the flattened `extract_xi` (surfaced during the 0.9.2 API review).
 - **[P3] `cluster_csv` has 8 positional args** — migrate to named flags before it grows further.
 - **[P3] Example overlap:** `examples/color_clustering` and `examples/cluster_csv` both hand-roll
   CSV I/O; factor a shared reader (the benchmarks already share `test/Benchmark/csv_points.hpp`).
