@@ -744,21 +744,25 @@ TEST_CASE("edge cases and degenerate inputs") {
 	for ( const auto& r : rd_few ) { if ( r.reach_dist >= 0.0 ) all_undefined = false; }
 	CHECK( all_undefined );
 
-	// All-identical points: auto-epsilon is 0, which still groups them into one cluster.
+	// All-identical points: auto-epsilon must not collapse to a zero radius. The knee
+	// estimator defers to the uniform scale on zero-variance input, so they group into one.
 	std::vector<P2> identical( 20, P2{ 3.0, 3.0 } );
+	CHECK( optics::epsilon_estimation_knee( identical, 5 ) > 0.0 );
 	const auto rd_id = optics::compute_reachability_dists( identical, 5 );
 	CHECK( rd_id.size() == 20 );
 	const auto cl_id = optics::get_cluster_indices( rd_id, 1.0 );
 	CHECK( cl_id.size() == 1 );
 	CHECK( cl_id[0].size() == 20 );
 
-	// Collinear (y constant): the effective-dimension epsilon estimate must still
-	// separate three groups along the x-axis (would fail with a 0/degenerate volume).
+	// Collinear (y constant, d_eff == 1): auto-epsilon must stay positive (a degenerate
+	// volume would give 0). With a generating distance covering the within-group spacing the
+	// three x-axis groups separate.
 	std::vector<P2> line;
 	for ( int g = 0; g < 3; ++g ) {
 		for ( int i = 0; i < 10; ++i ) { line.push_back( { g * 30.0 + i * 0.5, 0.0 } ); }
 	}
-	const auto rd_line = optics::compute_reachability_dists( line, 4 );  // auto epsilon, d_eff == 1
+	CHECK( optics::epsilon_estimation_knee( line, 4 ) > 0.0 );
+	const auto rd_line = optics::compute_reachability_dists( line, 4, 3.0 );
 	const auto cl_line = optics::get_cluster_indices( rd_line, 5.0 );
 	std::size_t big_line = 0;
 	for ( const auto& c : cl_line ) { if ( c.size() >= 5 ) ++big_line; }
@@ -789,7 +793,7 @@ TEST_CASE("convenience: convert_cloud + cluster_threshold + extract_xi") {
 	std::vector<std::array<int, 2>> int_pts = {
 		{ 100,100 },{ 102,100 },{ 101,101 }, { 0,0 },{ 1,0 },{ 0,1 }, { -100,-100 },{ -102,-100 },{ -101,-101 } };
 	auto cloud = optics::convert_cloud<float>( int_pts );
-	auto clusters = optics::cluster_threshold( cloud, 2, 10.0 );
+	auto clusters = optics::cluster_threshold( cloud, 2, 10.0, 5.0 );  // explicit eps: 3 tiny far-apart clusters
 	CHECK( clusters.size() == 3 );
 
 	// New points-based one-call helpers (min_pts 2nd, threshold/chi 3rd & optional).
@@ -1034,6 +1038,185 @@ TEST_CASE("memory invariant: Precompute cache grows with n; OnDemand holds one n
 	// OnDemand's largest neighborhood stays bounded at fixed density (no ~4x growth).
 	const double od_ratio = static_cast<double>( od2 ) / static_cast<double>( od1 );
 	CHECK( od_ratio < 2.5 );
+}
+
+
+TEST_CASE("ceos_neighbors: exact precision, good recall, symmetric, self-matching") {
+	// Four well-separated blobs, L2-normalized onto the unit sphere (cosine metric).
+	auto pts = optics::testdata::make_blobs<double, 3>( 4, 120, 30.0, 1.0, 123u );
+	for ( auto& p : pts ) {
+		const double nrm = std::sqrt( p[0] * p[0] + p[1] * p[1] + p[2] * p[2] );
+		if ( nrm > 0.0 ) { for ( auto& c : p ) { c /= nrm; } }
+	}
+	const std::size_t n = pts.size();
+	const double eps = 0.25;  // Euclidean radius on the unit sphere (monotone in cosine distance)
+	const std::size_t min_pts = 5;
+
+	optics::detail::CeosParams params;
+	params.n_projections = 512;
+	params.k = 20;
+	params.m = 40;
+	params.seed = 7;
+	const auto approx = optics::detail::ceos_neighbors( pts, eps, min_pts, params );
+	REQUIRE( approx.size() == n );
+
+	// Brute-force true eps-neighborhoods (incl. self) for precision/recall.
+	const double eps_sq = eps * eps;
+	std::vector<std::set<std::size_t>> truth( n );
+	for ( std::size_t i = 0; i < n; ++i ) {
+		for ( std::size_t j = 0; j < n; ++j ) {
+			if ( optics::detail::square_dist( pts[i], pts[j] ) <= eps_sq ) { truth[i].insert( j ); }
+		}
+	}
+
+	std::size_t total_true = 0, found_true = 0, returned = 0, returned_in_truth = 0;
+	for ( std::size_t i = 0; i < n; ++i ) {
+		CHECK( std::find( approx[i].begin(), approx[i].end(), i ) != approx[i].end() );  // self-match
+		const std::set<std::size_t> a( approx[i].begin(), approx[i].end() );
+		CHECK( a.size() == approx[i].size() );  // no duplicates
+		for ( const std::size_t x : a ) { returned++; if ( truth[i].count( x ) ) { returned_in_truth++; } }
+		for ( const std::size_t t : truth[i] ) { total_true++; if ( a.count( t ) ) { found_true++; } }
+	}
+
+	// Precision is exact by construction: every returned candidate is within eps.
+	CHECK( returned == returned_in_truth );
+	// Recall: CEOs recovers the large majority of true neighbors on well-separated data.
+	const double recall = static_cast<double>( found_true ) / static_cast<double>( total_true );
+	CHECK( recall > 0.7 );
+
+	// Symmetry: x in N(q)  <=>  q in N(x).
+	for ( std::size_t q = 0; q < n; ++q ) {
+		for ( const std::size_t x : approx[q] ) {
+			CHECK( std::find( approx[x].begin(), approx[x].end(), q ) != approx[x].end() );
+		}
+	}
+}
+
+
+// Rand index between two flat labelings: the fraction of point-pairs that agree on
+// same/different cluster. 1.0 == identical partition.
+static double rand_index( const std::vector<long long>& a, const std::vector<long long>& b ) {
+	const std::size_t n = a.size();
+	std::size_t agree = 0, total = 0;
+	for ( std::size_t i = 0; i < n; ++i ) {
+		for ( std::size_t j = i + 1; j < n; ++j ) {
+			if ( ( a[i] == a[j] ) == ( b[i] == b[j] ) ) { ++agree; }
+			++total;
+		}
+	}
+	return total ? static_cast<double>( agree ) / static_cast<double>( total ) : 1.0;
+}
+
+// Per-point labels from a cluster list (each cluster -- including singletons -- a distinct id).
+static std::vector<long long> labels_from_clusters( std::size_t n, const std::vector<std::vector<std::size_t>>& clusters ) {
+	std::vector<long long> labels( n, -1 );
+	long long id = 0;
+	for ( const auto& c : clusters ) {
+		for ( const std::size_t idx : c ) { labels[idx] = id; }
+		++id;
+	}
+	return labels;
+}
+
+TEST_CASE("sOPTICS: high Rand-index agreement with exact OPTICS; seed-deterministic") {
+	// Normalize so both algorithms share the SAME metric: exact OPTICS on the unit
+	// sphere is monotone-equivalent to cosine OPTICS, which sOPTICS approximates.
+	auto pts = optics::testdata::make_blobs<double, 3>( 5, 120, 30.0, 1.0, 321u );
+	for ( auto& p : pts ) {
+		const double nrm = std::sqrt( p[0] * p[0] + p[1] * p[1] + p[2] * p[2] );
+		if ( nrm > 0.0 ) { for ( auto& c : p ) { c /= nrm; } }
+	}
+	const std::size_t n = pts.size();
+	const std::size_t min_pts = 6;
+	const double eps = 0.3;
+
+	const auto exact = optics::compute_reachability_dists( pts, min_pts, eps );
+	const auto approx = optics::compute_soptics_reachability_dists( pts, min_pts, eps, 512u, 20u, std::size_t{ 40 }, 7u );
+
+	// The approximate ordering still satisfies the generic OPTICS-output invariants (B4).
+	check_ordering_invariants( exact, n );
+	check_ordering_invariants( approx, n );
+
+	// Flat-cut both plots at the same threshold; the partitions should largely agree.
+	const double thr = 0.5 * eps;
+	const auto la = labels_from_clusters( n, optics::get_cluster_indices( exact, thr ) );
+	const auto lb = labels_from_clusters( n, optics::get_cluster_indices( approx, thr ) );
+	CHECK( rand_index( la, lb ) > 0.9 );  // typically ~0.99 on well-separated data
+
+	// Determinism: same seed => byte-identical ordering.
+	const auto approx_same = optics::compute_soptics_reachability_dists( pts, min_pts, eps, 512u, 20u, std::size_t{ 40 }, 7u );
+	CHECK( ( approx == approx_same ) );
+
+	// A different seed still agrees closely with exact OPTICS (stability).
+	const auto approx_other = optics::compute_soptics_reachability_dists( pts, min_pts, eps, 512u, 20u, std::size_t{ 40 }, 99u );
+	const auto ld = labels_from_clusters( n, optics::get_cluster_indices( approx_other, thr ) );
+	CHECK( rand_index( la, ld ) > 0.9 );
+}
+
+TEST_CASE("sOPTICS: edge cases (empty, < min_pts, identical points, high-D)") {
+	// Empty cloud -> well-formed empty ordering.
+	const std::vector<std::array<double, 3>> empty;
+	CHECK( optics::compute_soptics_reachability_dists( empty, 4 ).empty() );
+
+	// Fewer points than min_pts: a valid permutation, every reach UNDEFINED.
+	std::vector<std::array<double, 3>> few = { { 1, 0, 0 }, { 0, 1, 0 } };
+	const auto r_few = optics::compute_soptics_reachability_dists( few, 5, -1.0, 64u );
+	CHECK( r_few.size() == few.size() );
+	for ( const auto& rd : r_few ) { CHECK( rd.reach_dist < 0.0 ); }
+
+	// Identical points (degenerate projections) must not crash and stay a permutation.
+	const std::vector<std::array<double, 3>> same( 30, { 1.0, 2.0, 3.0 } );
+	const auto r_same = optics::compute_soptics_reachability_dists( same, 4, -1.0, 64u );
+	CHECK( r_same.size() == same.size() );
+
+	// High-D smoke test.
+	const auto hd = optics::testdata::make_blobs<double, 16>( 3, 40, 20.0, 1.0, 5u );
+	const auto r_hd = optics::compute_soptics_reachability_dists( hd, 5, -1.0, 256u );
+	CHECK( r_hd.size() == hd.size() );
+}
+
+
+TEST_CASE("Xi min_cluster_size: decoupled from min_pts, default-preserving (#57)") {
+	const auto pts = optics::testdata::make_blobs<double, 2>( 5, 60, 30.0, 1.0, 3u );
+	const std::size_t min_pts = 10;
+	const auto reach = optics::compute_reachability_dists( pts, min_pts );
+
+	// min_cluster_size 0 (default) resolves to min_pts -> identical to passing min_pts
+	// explicitly, so existing behavior (and the chi_test_* cases) is unchanged.
+	const auto base = optics::get_chi_clusters_flat( reach, 0.05, min_pts );
+	const auto same = optics::get_chi_clusters_flat( reach, 0.05, min_pts, 0.0, min_pts );
+	CHECK( ( base == same ) );
+
+	// A different (smaller) min_cluster_size is accepted and yields valid ranges.
+	const auto smaller = optics::get_chi_clusters_flat( reach, 0.05, min_pts, 0.0, 3 );
+	for ( const auto& c : smaller ) { CHECK( c.first <= c.second ); REQUIRE( c.second < reach.size() ); }
+	// get_chi_clusters (tree) plumbs the same parameter.
+	CHECK( !optics::get_chi_clusters( reach, 0.05, min_pts, 0.0, 3 ).empty() );
+}
+
+
+TEST_CASE("knee epsilon: smaller than uniform on clustered data, yields good Xi clusters (#57)") {
+	// 15 tight blobs. make_blobs emits blob b's points contiguously, so point i's ground-
+	// truth label is i / points_per_blob. The under-segmentation that motivated #57 is the
+	// uniform-density epsilon_estimation over-shooting on clustered data and over-smoothing
+	// the reachability; the k-distance-knee estimator lands near the within-cluster scale.
+	// (The dramatic R15 recovery is shown in docs/benchmarking.md; that data is not bundled.)
+	const std::size_t n_blobs = 15, per = 40, min_pts = 10;
+	const auto pts = optics::testdata::make_blobs<double, 2>( n_blobs, per, 60.0, 0.4, 11u );
+	const std::size_t n = pts.size();
+	std::vector<long long> truth( n );
+	for ( std::size_t i = 0; i < n; ++i ) { truth[i] = static_cast<long long>( i / per ); }
+
+	const double eps_uniform = optics::epsilon_estimation( pts, min_pts );
+	const double eps_knee = optics::epsilon_estimation_knee( pts, min_pts );
+	CHECK( eps_knee < eps_uniform );  // the mechanism behind #57
+	CHECK( eps_knee > 0.0 );
+
+	// The knee eps produces a valid, high-quality Xi clustering of the tight blobs.
+	const auto reach = optics::compute_reachability_dists( pts, min_pts, eps_knee );
+	const auto labels = labels_from_clusters(
+		n, optics::get_cluster_indices( reach, optics::get_chi_clusters_flat( reach, 0.05, min_pts ) ) );
+	CHECK( rand_index( truth, labels ) > 0.9 );
 }
 
 

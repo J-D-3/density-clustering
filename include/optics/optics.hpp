@@ -11,6 +11,7 @@
 #include "detail/math.hpp"
 #include "detail/thread_pool.hpp"
 #include "detail/profile.hpp"
+#include "detail/random_projection.hpp"
 
 #include <algorithm>
 #include <array>
@@ -100,6 +101,78 @@ struct seed_min_heap_cmp {
 };
 
 using seed_queue = std::priority_queue<reachability_dist, std::vector<reachability_dist>, seed_min_heap_cmp>;
+
+
+// Drives the OPTICS cluster-ordering from two providers, so the loop is shared by
+// OPTICS and sOPTICS. The neighbor/core-distance policy (backend + epsilon, Scan/Knn,
+// random projections, ...) lives entirely in the providers; this function owns only the
+// algorithm-agnostic machinery: the seed priority queue, the relaxation, lazy deletion,
+// and the ordered-list assembly.
+//   neighbors_of(idx)       -> const std::vector<std::size_t>&  : idx's neighbor indices.
+//        CONTRACT: the returned reference stays valid only until the next neighbors_of
+//        call, so an OnDemand provider may hand back a single reused buffer.
+//   core_dist_of(idx, nbrs) -> std::optional<double>            : idx's core distance,
+//        or nullopt when UNDEFINED (fewer than min_pts neighbors).
+//   prof : phase profiler; the relax and loop phases are accumulated here. The caller
+//        times index_build/precompute and calls prof.report() after this returns.
+template <class T, std::size_t Dim, class NeighborsOf, class CoreDistOf>
+std::vector<reachability_dist> optics_order(
+		const std::vector<Point<T, Dim>>& points,
+		NeighborsOf&& neighbors_of, CoreDistOf&& core_dist_of, PhaseProfiler& prof ) {
+	const std::size_t n = points.size();
+
+	std::vector<char> processed( n, 0 );
+	std::vector<std::size_t> ordered_list;
+	ordered_list.reserve( n );
+	std::vector<double> reachability( n, -1.0 );
+
+	// Reused across points; drained to empty whenever an expansion finishes.
+	seed_queue seeds;
+	const auto relax_neighbors = [&]( std::size_t idx, const std::vector<std::size_t>& nbrs, double core_dist ) {
+		[[maybe_unused]] auto _s = prof.scope( prof.relax );
+		for ( const std::size_t o : nbrs ) {
+			if ( processed[o] ) { continue; }
+			const double new_rd = std::max( core_dist, detail::dist( points[idx], points[o] ) );
+			if ( reachability[o] < 0.0 || new_rd < reachability[o] ) {
+				reachability[o] = new_rd;  // authoritative; the prior heap entry becomes stale
+				seeds.push( reachability_dist( o, new_rd ) );
+			}
+		}
+	};
+
+	const auto _t_loop = prof.now();
+	for ( std::size_t point_idx = 0; point_idx < n; point_idx++ ) {
+		if ( processed[point_idx] ) { continue; }
+		processed[point_idx] = 1;
+		ordered_list.push_back( point_idx );
+
+		const auto& neighbor_indices = neighbors_of( point_idx );
+		const auto core_dist = core_dist_of( point_idx, neighbor_indices );
+		if ( core_dist.has_value() ) { relax_neighbors( point_idx, neighbor_indices, *core_dist ); }
+
+		while ( !seeds.empty() ) {
+			const reachability_dist s = seeds.top();
+			seeds.pop();
+			// Lazy deletion: skip entries already processed or superseded by a smaller push.
+			if ( processed[s.point_index] || s.reach_dist != reachability[s.point_index] ) { continue; }
+			processed[s.point_index] = 1;
+			ordered_list.push_back( s.point_index );
+
+			const auto& s_neighbor_indices = neighbors_of( s.point_index );
+			const auto s_core_dist = core_dist_of( s.point_index, s_neighbor_indices );
+			if ( s_core_dist.has_value() ) { relax_neighbors( s.point_index, s_neighbor_indices, *s_core_dist ); }
+		}
+	}
+	assert( ordered_list.size() == n );
+	prof.add( prof.loop, _t_loop );
+
+	std::vector<reachability_dist> result;
+	result.reserve( n );
+	for ( const std::size_t point_idx : ordered_list ) {
+		result.emplace_back( point_idx, reachability[point_idx] );
+	}
+	return result;
+}
 
 }  // namespace detail
 
@@ -198,7 +271,7 @@ double epsilon_estimation_knee( const std::vector<std::array<T, Dim>>& points, s
 		if ( cd.has_value() ) { k_dist.push_back( *cd ); }
 	}
 	if ( k_dist.size() < 3 ) {
-		return k_dist.empty() ? epsilon_estimation( points, min_pts ) : k_dist.back();
+		return ( k_dist.empty() || k_dist.back() <= 0.0 ) ? epsilon_estimation( points, min_pts ) : k_dist.back();
 	}
 
 	std::sort( k_dist.begin(), k_dist.end() );  // ascending
@@ -209,14 +282,18 @@ double epsilon_estimation_knee( const std::vector<std::array<T, Dim>>& points, s
 	const double dx = static_cast<double>( m - 1 );
 	const double dy = k_dist.back() - y0;
 	const double norm = std::sqrt( dx * dx + dy * dy );
-	if ( norm <= 0.0 ) { return k_dist.back(); }  // flat curve: every k-distance equal
+	// Flat curve (every k-distance equal). If that value is positive it is the scale; if it
+	// is 0 (e.g. all-identical points) defer to the uniform estimate so auto-eps never collapses.
+	if ( norm <= 0.0 ) { return k_dist.back() > 0.0 ? k_dist.back() : epsilon_estimation( points, min_pts ); }
 	double best_metric = -1.0;
 	std::size_t best_i = m - 1;
 	for ( std::size_t i = 0; i < m; ++i ) {
 		const double d = std::abs( dy * static_cast<double>( i ) - dx * ( k_dist[i] - y0 ) ) / norm;
 		if ( d > best_metric ) { best_metric = d; best_i = i; }
 	}
-	return k_dist[best_i];
+	// A positive knee is the within-cluster scale; a non-positive one (degenerate input)
+	// defers to the uniform estimate so auto-eps never collapses to a zero radius.
+	return k_dist[best_i] > 0.0 ? k_dist[best_i] : epsilon_estimation( points, min_pts );
 }
 
 
@@ -256,10 +333,20 @@ std::vector<reachability_dist> compute_reachability_dists(
 	if ( points.empty() ) { return {}; }
 
 	double eps = epsilon;
-	if ( eps <= 0.0 ) { eps = epsilon_estimation( points, min_pts ); }
-	// epsilon_estimation returns a positive scale for any input with >= 2 points,
-	// using only the non-degenerate dimensions (so collinear/planar/identical
-	// inputs no longer collapse to a zero radius).
+	if ( eps <= 0.0 ) {
+		// Auto-epsilon. Default to the k-distance-knee estimator, which tracks the actual
+		// within-cluster scale -- the uniform-density epsilon_estimation over-estimates on
+		// clustered data, which both slows the dense path AND smooths the reachability so Xi
+		// under-segments (issue #57). The knee needs a KnnCoreDist backend; for backends that
+		// lack it (e.g. Boost) fall back to the uniform estimate (if constexpr => zero overhead,
+		// and no knn_core_dist instantiation for backends without it). Both yield a positive
+		// scale for any >= 2-point input (degenerate inputs included), so no zero-radius collapse.
+		if constexpr ( KnnCoreDist<Backend, T, Dim> ) {
+			eps = epsilon_estimation_knee<T, Dim, Backend>( points, min_pts );
+		} else {
+			eps = epsilon_estimation( points, min_pts );
+		}
+	}
 	const T eps_t = static_cast<T>( eps );
 
 	// Optional phase profiler: a no-op unless built with -DOPTICS_PROFILE (see
@@ -269,11 +356,6 @@ std::vector<reachability_dist> compute_reachability_dists(
 	const Backend backend( points );
 	_prof.add( _prof.index_build, _t_build );
 	const std::size_t n = points.size();
-
-	std::vector<char> processed( n, 0 );
-	std::vector<std::size_t> ordered_list;
-	ordered_list.reserve( n );
-	std::vector<double> reachability( n, -1.0 );
 
 	// Neighbor acquisition: precompute-all (parallel) or on-demand.
 	const auto _t_pre = _prof.now();
@@ -333,52 +415,89 @@ std::vector<reachability_dist> compute_reachability_dists(
 		return detail::compute_core_dist( points[idx], points, nbrs, min_pts );
 	};
 
-	// Reused across points; drained to empty whenever an expansion finishes.
-	detail::seed_queue seeds;
-	const auto relax_neighbors = [&]( std::size_t idx, const std::vector<std::size_t>& nbrs, double core_dist ) {
-		[[maybe_unused]] auto _s = _prof.scope( _prof.relax );
-		for ( const std::size_t o : nbrs ) {
-			if ( processed[o] ) { continue; }
-			const double new_rd = std::max( core_dist, detail::dist( points[idx], points[o] ) );
-			if ( reachability[o] < 0.0 || new_rd < reachability[o] ) {
-				reachability[o] = new_rd;  // authoritative; the prior heap entry becomes stale
-				seeds.push( reachability_dist( o, new_rd ) );
-			}
-		}
-	};
-
-	const auto _t_loop = _prof.now();
-	for ( std::size_t point_idx = 0; point_idx < n; point_idx++ ) {
-		if ( processed[point_idx] ) { continue; }
-		processed[point_idx] = 1;
-		ordered_list.push_back( point_idx );
-
-		const auto& neighbor_indices = neighbors_of( point_idx );
-		const auto core_dist = core_dist_of( point_idx, neighbor_indices );
-		if ( core_dist.has_value() ) { relax_neighbors( point_idx, neighbor_indices, *core_dist ); }
-
-		while ( !seeds.empty() ) {
-			const reachability_dist s = seeds.top();
-			seeds.pop();
-			// Lazy deletion: skip entries already processed or superseded by a smaller push.
-			if ( processed[s.point_index] || s.reach_dist != reachability[s.point_index] ) { continue; }
-			processed[s.point_index] = 1;
-			ordered_list.push_back( s.point_index );
-
-			const auto& s_neighbor_indices = neighbors_of( s.point_index );
-			const auto s_core_dist = core_dist_of( s.point_index, s_neighbor_indices );
-			if ( s_core_dist.has_value() ) { relax_neighbors( s.point_index, s_neighbor_indices, *s_core_dist ); }
-		}
-	}
-	assert( ordered_list.size() == n );
-	_prof.add( _prof.loop, _t_loop );
+	// All neighbor/core-distance policy is now captured in the two closures above;
+	// the algorithm-agnostic ordering machinery lives in detail::optics_order (shared
+	// with sOPTICS). index_build/precompute were timed above; the helper accumulates
+	// the relax/loop phases into _prof, and we report once it returns.
+	auto result = detail::optics_order<T, Dim>( points, neighbors_of, core_dist_of, _prof );
 	_prof.report( n );
+	return result;
+}
 
-	std::vector<reachability_dist> result;
-	result.reserve( n );
-	for ( const std::size_t point_idx : ordered_list ) {
-		result.emplace_back( point_idx, reachability[point_idx] );
+
+//=== sOPTICS: scalable approximate OPTICS via random projections ============
+
+// sOPTICS (Xu & Pham, NeurIPS 2024): a scalable, approximate OPTICS that replaces the
+// exact radius search with CEOs random-projection neighborhoods (see
+// detail/random_projection.hpp). It returns the same reachability_dist cluster-ordering
+// as compute_reachability_dists, so all existing extraction (get_cluster_indices,
+// get_chi_clusters, cluster_threshold, ...) applies unchanged.
+//
+// Metric is COSINE: points are L2-normalized onto the unit sphere internally, where
+// Euclidean distance is monotone in cosine distance, so the ordering / reachability-plot
+// valleys match the cosine ones. Do NOT expect raw-Euclidean OPTICS semantics on
+// un-normalized data (other metrics are issue #51). The result is randomized but
+// deterministic in `seed` (identical seed => identical ordering); validate via
+// statistical agreement (Rand/NMI) with exact OPTICS, not bit-identical orderings.
+//
+//   epsilon       : generating distance -- a Euclidean radius on the unit sphere, in
+//                   [0, 2]. Like OPTICS it bounds the (approximate) neighborhoods; set it
+//                   generously to reveal structure across scales. <= 0 => 2.0 (keep all
+//                   CEOs candidates; the candidate pool is bounded regardless).
+//   n_projections : D Gaussian random vectors (more => higher recall, more time).
+//   k, m          : CEOs tunables (top-k extreme vectors/point; top-m extreme points/
+//                   vector). 0 => defaults (k = 10, m = 2*min_pts).
+//   seed          : RNG seed for the projections (determinism).
+//   n_threads     : workers for the parallel projection/candidate phases (0 => hw).
+template <class T, std::size_t Dim>
+std::vector<reachability_dist> compute_soptics_reachability_dists(
+		const std::vector<std::array<T, Dim>>& points, std::size_t min_pts,
+		double epsilon = -1.0, unsigned n_projections = 1024, unsigned k = 0,
+		std::size_t m = 0, unsigned seed = 42, unsigned n_threads = 0 ) {
+
+	static_assert( std::is_floating_point_v<T>, "compute_soptics_reachability_dists: coordinate type 'T' must be float or double" );
+	static_assert( Dim >= 1, "compute_soptics_reachability_dists: dimension must be >= 1" );
+	if ( min_pts < 1 ) { throw std::invalid_argument( "compute_soptics_reachability_dists: min_pts must be >= 1" ); }
+	if ( points.empty() ) { return {}; }
+
+	// L2-normalize onto the unit sphere (cosine metric). A zero-norm point (the origin)
+	// has no direction; leave it unchanged -- it is a degenerate input either way.
+	std::vector<std::array<T, Dim>> unit( points.size() );
+	for ( std::size_t i = 0; i < points.size(); ++i ) {
+		double nrm_sq = 0.0;
+		for ( std::size_t c = 0; c < Dim; ++c ) {
+			const double v = static_cast<double>( points[i][c] );
+			nrm_sq += v * v;
+		}
+		const double nrm = std::sqrt( nrm_sq );
+		if ( nrm > 0.0 ) {
+			for ( std::size_t c = 0; c < Dim; ++c ) { unit[i][c] = static_cast<T>( static_cast<double>( points[i][c] ) / nrm ); }
+		} else {
+			unit[i] = points[i];
+		}
 	}
+
+	// On the unit sphere all Euclidean distances lie in [0, 2]; the permissive default
+	// keeps every CEOs candidate (the pool is bounded by ~2*k*m anyway).
+	const double eps = ( epsilon <= 0.0 ) ? 2.0 : epsilon;
+
+	detail::CeosParams params;
+	params.n_projections = n_projections;
+	params.k = k;
+	params.m = m;
+	params.seed = seed;
+	params.n_threads = n_threads;
+	const auto neighbors = detail::ceos_neighbors( unit, eps, min_pts, params );
+
+	// Share the OPTICS ordering driver: neighbors come from the CEOs index, and the
+	// core-distance is the min_pts-th nearest among those candidates (the existing scan).
+	detail::PhaseProfiler prof;
+	const auto neighbors_of = [&]( std::size_t idx ) -> const std::vector<std::size_t>& { return neighbors[idx]; };
+	const auto core_dist_of = [&]( std::size_t idx, const std::vector<std::size_t>& nbrs ) -> std::optional<double> {
+		return detail::compute_core_dist( unit[idx], unit, nbrs, min_pts );
+	};
+	auto result = detail::optics_order<T, Dim>( unit, neighbors_of, core_dist_of, prof );
+	prof.report( points.size() );
 	return result;
 }
 
@@ -431,7 +550,13 @@ struct SDA {
 }  // namespace detail
 
 
-inline std::vector<chi_cluster_indices> get_chi_clusters_flat( const std::vector<reachability_dist>& reach_dists_, const double chi, std::size_t min_pts, double steep_area_min_diff = 0.0 ) {
+inline std::vector<chi_cluster_indices> get_chi_clusters_flat( const std::vector<reachability_dist>& reach_dists_, const double chi, std::size_t min_pts, double steep_area_min_diff = 0.0, std::size_t min_cluster_size = 0 ) {
+	// The Xi extractor's steep-area span cap and minimum cluster size. Historically these
+	// reused min_pts (the ordering's *density* parameter), which over-merges many tight,
+	// similar-density clusters at a moderate min_pts (issue #57). min_cluster_size > 0
+	// decouples them; 0 => use min_pts, preserving the original behavior (and the pinned
+	// chi_test_* results).
+	const std::size_t mcs = ( min_cluster_size > 0 ) ? min_cluster_size : min_pts;
 	std::vector<std::pair<std::size_t, std::size_t>> clusters;
 	std::vector<detail::SDA> SDAs;
 	const std::size_t n_reachdists = reach_dists_.size();
@@ -465,24 +590,24 @@ inline std::vector<chi_cluster_indices> get_chi_clusters_flat( const std::vector
 			sda.mib = std::max( sda.mib, mib );
 		}
 	};
-	const auto get_sda_end = [&n_reachdists, &get_reach_dist, &min_pts, &is_steep_down_pt]( const std::size_t start_idx ) -> std::size_t {
+	const auto get_sda_end = [&n_reachdists, &get_reach_dist, &mcs, &is_steep_down_pt]( const std::size_t start_idx ) -> std::size_t {
 		assert( is_steep_down_pt( start_idx ) );
 		std::size_t last_sd_idx = start_idx;
 		std::size_t idx = start_idx + 1;
 		while ( idx < n_reachdists ) {
-			if ( idx - last_sd_idx >= min_pts ) { return last_sd_idx; }
+			if ( idx - last_sd_idx >= mcs ) { return last_sd_idx; }
 			if ( get_reach_dist( idx ) > get_reach_dist( idx - 1 ) ) { return last_sd_idx; }
 			if ( is_steep_down_pt( idx ) ) { last_sd_idx = idx; }
 			idx++;
 		}
 		return std::max( n_reachdists - 2, last_sd_idx );
 	};
-	const auto get_sua_end = [&n_reachdists, &get_reach_dist, &min_pts, &is_steep_up_pt]( const std::size_t start_idx ) -> std::size_t {
+	const auto get_sua_end = [&n_reachdists, &get_reach_dist, &mcs, &is_steep_up_pt]( const std::size_t start_idx ) -> std::size_t {
 		assert( is_steep_up_pt( start_idx ) );
 		std::size_t last_su_idx = start_idx;
 		std::size_t idx = start_idx + 1;
 		while ( idx < n_reachdists ) {
-			if ( idx - last_su_idx >= min_pts ) { return last_su_idx; }
+			if ( idx - last_su_idx >= mcs ) { return last_su_idx; }
 			if ( get_reach_dist( idx ) < get_reach_dist( idx - 1 ) ) { return last_su_idx; }
 			if ( is_steep_up_pt( idx ) ) { last_su_idx = idx; }
 			idx++;
@@ -512,13 +637,13 @@ inline std::vector<chi_cluster_indices> get_chi_clusters_flat( const std::vector
 		assert( false );
 		return { 0, 0 };
 	};
-	const auto valid_combination = [&chi, &steep_area_min_diff, &min_pts, &get_reach_dist]( const detail::SDA& sda, std::size_t sua_begin_idx, std::size_t sua_end_idx ) -> bool {
+	const auto valid_combination = [&chi, &steep_area_min_diff, &mcs, &get_reach_dist]( const detail::SDA& sda, std::size_t sua_begin_idx, std::size_t sua_end_idx ) -> bool {
 		const double f = std::max( chi, steep_area_min_diff );
 		if ( sda.mib > get_reach_dist( sua_end_idx + 1 ) * ( 1 - f ) ) { return false; }
 
 		std::size_t sda_middle = ( sda.begin_idx + ( sda.end_idx - sda.begin_idx ) / 2 );
 		std::size_t sua_middle = ( sua_begin_idx + ( sua_end_idx - sua_begin_idx ) / 2 );
-		if ( sua_middle - sda_middle < min_pts - 2 ) {
+		if ( sua_middle - sda_middle < mcs - 2 ) {
 			return false;
 		}
 		return true;
@@ -617,8 +742,8 @@ inline std::vector<cluster_tree> flat_clusters_to_tree( const std::vector<chi_cl
 }
 
 
-inline std::vector<cluster_tree> get_chi_clusters( const std::vector<reachability_dist>& reach_dists, const double chi, std::size_t min_pts, const double steep_area_min_diff = 0.0 ) {
-	auto clusters_flat = get_chi_clusters_flat( reach_dists, chi, min_pts, steep_area_min_diff );
+inline std::vector<cluster_tree> get_chi_clusters( const std::vector<reachability_dist>& reach_dists, const double chi, std::size_t min_pts, const double steep_area_min_diff = 0.0, std::size_t min_cluster_size = 0 ) {
+	auto clusters_flat = get_chi_clusters_flat( reach_dists, chi, min_pts, steep_area_min_diff, min_cluster_size );
 	return flat_clusters_to_tree( clusters_flat );
 }
 
@@ -766,9 +891,9 @@ template <class T, std::size_t Dim, class Backend = NanoflannBackend<T, Dim>>
 std::vector<std::vector<std::size_t>> extract_xi(
 	const std::vector<std::array<T, Dim>>& points, std::size_t min_pts, double chi = 0.05,
 	double epsilon = -1.0, NeighborMode mode = NeighborMode::OnDemand, unsigned n_threads = 0,
-	double steep_area_min_diff = 0.0 ) {
+	double steep_area_min_diff = 0.0, std::size_t min_cluster_size = 0 ) {
 	const auto reach = compute_reachability_dists<T, Dim, Backend>( points, min_pts, epsilon, mode, n_threads );
-	const auto flat = get_chi_clusters_flat( reach, chi, min_pts, steep_area_min_diff );
+	const auto flat = get_chi_clusters_flat( reach, chi, min_pts, steep_area_min_diff, min_cluster_size );
 	return get_cluster_indices( reach, flat );
 }
 

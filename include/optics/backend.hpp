@@ -131,7 +131,9 @@ public:
         const std::size_t found = result_set.size();
         if (found < min_pts) return std::nullopt;
         const T kth_sq = dist_sq[min_pts - 1];
-        if (kth_sq > r * r) return std::nullopt;
+        // Compare in double so a "no cap" sentinel radius (numeric_limits<T>::max(), used by
+        // epsilon_estimation_knee) does not overflow r*r. Exact for double T (the pinned Knn path).
+        if (static_cast<double>(kth_sq) > static_cast<double>(r) * static_cast<double>(r)) return std::nullopt;
         return std::sqrt(static_cast<double>(kth_sq));
     }
 

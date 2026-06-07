@@ -6,6 +6,48 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
 
 ## [Unreleased]
 
+### Added
+- `optics::compute_soptics_reachability_dists` — **sOPTICS**, a scalable, approximate OPTICS via CEOs
+  random projections (sDBSCAN/sOPTICS, Xu & Pham, NeurIPS 2024), reimplemented from the paper. Cosine
+  metric (points are L2-normalized onto the unit sphere internally); returns the same
+  `reachability_dist` cluster-ordering, so all existing extraction (threshold / Xi) applies unchanged.
+  Output is randomized but deterministic in `seed`, and validated by Rand-index agreement with exact
+  OPTICS (not bit-identical orderings). New `include/optics/detail/random_projection.hpp` holds the
+  CEOs neighbor index (#50).
+- Internal: the OPTICS ordering loop is factored into `detail::optics_order`, an algorithm-agnostic
+  driver (seed queue / relaxation / lazy deletion) shared by OPTICS and sOPTICS through a
+  neighbor-provider + core-distance-provider pair. Behavior-preserving for OPTICS (orderings unchanged).
+- `documentation/` — archived sources for the random-projection work (the sDBSCAN/sOPTICS paper plus a
+  `references.md` of citations, comparison targets, and licensing notes).
+- Benchmarks: `optics_soptics_compare` (sOPTICS vs exact OPTICS — Rand index + timing on synthetic
+  normalized blobs) and `optics_quality_compare` (emits OPTICS/sOPTICS predicted labels for a CSV cloud).
+- `tools/quality_benchmark.py` — a clustering-quality harness scoring OPTICS + sOPTICS (ours),
+  scikit-learn OPTICS + HDBSCAN, and **mhahsler/dbscan (R)** against ground-truth labels with
+  **ARI / NMI / Rand**, plus a timing table (#54, #53). dbscan-R runs as an exact-Euclidean OPTICS
+  at the *same* generating distance as ours (fair timing) when R + the `dbscan` package are present
+  (auto-detected; gracefully skipped otherwise). Remaining external engines (ELKI, sDbscan) are
+  documented in `tools/README.md`.
+- `tools/fetch_datasets.py` + `tools/run_dbscan_r.R` — fetch Franti's third-party benchmark "shape
+  sets" (Aggregation/Compound/spiral/R15/jain/flame/D31) and run mhahsler/dbscan's OPTICS+Xi; both
+  used by the quality harness.
+- Optional `min_cluster_size` parameter on `get_chi_clusters_flat` / `get_chi_clusters` / `extract_xi`
+  — decouples the Xi extractor's minimum-cluster-size / steep-area span cap from `min_pts` (ELKI
+  parity). `0` (default) uses `min_pts`, so existing behavior and the `chi_test_*` cases are unchanged
+  (#57).
+- **Benchmark finding (#57):** the under-segmentation of clustered data (starkly R15: ARI 0.43) is the
+  uniform-density `epsilon_estimation` over-shooting, not the Xi logic; `epsilon_estimation_knee` (#41)
+  recovers it (R15 ARI 0.95). `tools/quality_benchmark.py` now defaults to `--eps knee`. See
+  `docs/benchmarking.md`.
+
+### Changed
+- **Auto-epsilon now defaults to the k-distance-knee estimator** (`epsilon_estimation_knee`) instead of
+  the uniform-density `epsilon_estimation`, across `compute_reachability_dists` and the `cluster_threshold`
+  / `extract_xi` wrappers. The uniform estimate over-shoots on clustered data, which slows the dense path
+  and over-smooths the reachability so Xi under-segments (Franti R15: ARI 0.43 → 0.95). It falls back to
+  the uniform estimate for backends without `KnnCoreDist` and on degenerate (zero-variance) inputs. Pass
+  an explicit `epsilon` for the old behavior. A deliberate pre-1.0 behavior change toward the API freeze
+  (#49, #57).
+
 ## [0.9.2] — 2026-06-07
 
 Focus: usability and hardening on the road to 1.0 — smarter parameters, safer memory, and broader
