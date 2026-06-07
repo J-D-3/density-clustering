@@ -1,8 +1,8 @@
 # Plan — the 1.0.0 benchmark matrix (single reference study)
 
-**Status:** planned, *not yet executed*. This is the design for one large, reproducible study run
-**once all 1.0.0 features are merged** (sOPTICS #50, non-Euclidean metrics #51, HDBSCAN\* #52, HNSW
-backend #47, the comparison + quality harnesses #53/#54). Its two jobs:
+**Status:** planned, *not yet executed*. Tracked by **issue #59**. This is the design for one large,
+reproducible study run **once all 1.0.0 features are merged** (sOPTICS #50, non-Euclidean metrics
+#51, HDBSCAN\* #52, HNSW backend #47, the comparison + quality harnesses #53/#54). Its two jobs:
 
 1. **Pick the library's data-dependent defaults**, with evidence — the four decisions in §1.
 2. Be the project's **single, citable performance reference** against other libraries on the same
