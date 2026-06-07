@@ -5,6 +5,9 @@ Optional glue around the C++ library: generate data, cluster it (via the
 required to build or use the library — install the deps with
 `pip install -r ../requirements.txt`.
 
+For benchmarking methodology — which datasets, the comparability caveats (same-eps, tie-breaking,
+metric matching), engine status, and findings/TODOs — see [`../docs/benchmarking.md`](../docs/benchmarking.md).
+
 ## The CSV contract
 
 Everything talks through two dimension-agnostic CSV shapes written by
