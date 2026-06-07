@@ -6,6 +6,20 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
 
 ## [Unreleased]
 
+### Added
+- `optics::compute_soptics_reachability_dists` — **sOPTICS**, a scalable, approximate OPTICS via CEOs
+  random projections (sDBSCAN/sOPTICS, Xu & Pham, NeurIPS 2024), reimplemented from the paper. Cosine
+  metric (points are L2-normalized onto the unit sphere internally); returns the same
+  `reachability_dist` cluster-ordering, so all existing extraction (threshold / Xi) applies unchanged.
+  Output is randomized but deterministic in `seed`, and validated by Rand-index agreement with exact
+  OPTICS (not bit-identical orderings). New `include/optics/detail/random_projection.hpp` holds the
+  CEOs neighbor index (#50).
+- Internal: the OPTICS ordering loop is factored into `detail::optics_order`, an algorithm-agnostic
+  driver (seed queue / relaxation / lazy deletion) shared by OPTICS and sOPTICS through a
+  neighbor-provider + core-distance-provider pair. Behavior-preserving for OPTICS (orderings unchanged).
+- `documentation/` — archived sources for the random-projection work (the sDBSCAN/sOPTICS paper plus a
+  `references.md` of citations, comparison targets, and licensing notes).
+
 ## [0.9.2] — 2026-06-07
 
 Focus: usability and hardening on the road to 1.0 — smarter parameters, safer memory, and broader
