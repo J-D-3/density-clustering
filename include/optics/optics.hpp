@@ -182,11 +182,16 @@ double epsilon_estimation( const std::vector<Point<T, dimension>>& points, std::
 //   core_dist: Scan (default) or Knn core-distance computation. Knn is faster on
 //              dense clouds and yields identical results; it falls back to Scan
 //              for backends that do not model KnnCoreDist.
+//   max_precompute_bytes: optional guard for the Precompute neighbor cache. When > 0,
+//              the cache size is estimated from a small sample before allocating; if the
+//              estimate exceeds this many bytes, throws std::runtime_error suggesting
+//              OnDemand instead of attempting a multi-GB allocation. 0 (default) = no check;
+//              ignored by OnDemand (which has no such buffer).
 template <class T, std::size_t Dim, class Backend = NanoflannBackend<T, Dim>>
 std::vector<reachability_dist> compute_reachability_dists(
 	const std::vector<std::array<T, Dim>>& points, std::size_t min_pts,
 	double epsilon = -1.0, NeighborMode mode = NeighborMode::OnDemand, unsigned n_threads = 0,
-	CoreDistMode core_dist_mode = CoreDistMode::Scan ) {
+	CoreDistMode core_dist_mode = CoreDistMode::Scan, std::size_t max_precompute_bytes = 0 ) {
 
 	static_assert( std::is_floating_point_v<T>, "compute_reachability_dists: coordinate type 'T' must be float or double" );
 	static_assert( Dim >= 1, "compute_reachability_dists: dimension must be >= 1" );
@@ -213,6 +218,31 @@ std::vector<reachability_dist> compute_reachability_dists(
 	// Neighbor acquisition: precompute-all (parallel) or on-demand.
 	std::vector<std::vector<std::size_t>> neighbors;
 	if ( mode == NeighborMode::Precompute ) {
+		// Optional guard: estimate the neighbor-cache size from a small sample before
+		// committing to it, so a dense cloud doesn't silently try to allocate tens of GB.
+		// The sampling cost is incurred only when a cap is set (default 0 == no check).
+		if ( max_precompute_bytes > 0 ) {
+			const std::size_t sample = std::min<std::size_t>( n, 64 );
+			std::size_t neighbor_sum = 0;
+			std::vector<std::size_t> probe;
+			for ( std::size_t s = 0; s < sample; ++s ) {
+				probe.clear();
+				backend.radius_search( points[( n / sample ) * s], eps_t, probe );
+				neighbor_sum += probe.size();
+			}
+			const double avg_neighbors = static_cast<double>( neighbor_sum ) / static_cast<double>( sample );
+			const double est_bytes = static_cast<double>( n ) * static_cast<double>( sizeof( std::vector<std::size_t> ) )
+								   + static_cast<double>( n ) * avg_neighbors * static_cast<double>( sizeof( std::size_t ) );
+			if ( est_bytes > static_cast<double>( max_precompute_bytes ) ) {
+				std::ostringstream msg;
+				msg << "compute_reachability_dists: estimated Precompute neighbor cache ~"
+					<< static_cast<std::size_t>( est_bytes / ( 1024.0 * 1024.0 ) ) << " MB ("
+					<< n << " points, avg " << avg_neighbors << " neighbors/point) exceeds the "
+					<< ( max_precompute_bytes / ( 1024 * 1024 ) ) << " MB cap. Use "
+					   "NeighborMode::OnDemand (O(one neighborhood) memory) or a smaller epsilon.";
+				throw std::runtime_error( msg.str() );
+			}
+		}
 		neighbors.resize( n );
 		detail::parallel_for( n_threads, n, [&]( std::size_t i ) {
 			backend.radius_search( points[i], eps_t, neighbors[i] );
@@ -557,6 +587,48 @@ std::vector<std::vector<std::array<T, dimension>>> get_cluster_points(
 		for ( const std::size_t idx : cluster_indices ) { group.push_back( points[idx] ); }
 		result.push_back( std::move( group ) );
 	}
+	return result;
+}
+
+
+//=== Xi cluster tree -> point indices =======================================
+
+namespace detail {
+// Recursively rebuild a Xi cluster node, replacing its (begin,end) range into the
+// ordering with the list of original point indices it covers.
+inline Node<std::vector<std::size_t>> chi_node_to_points(
+	const Node<chi_cluster_indices>& node, const std::vector<reachability_dist>& reach_dists ) {
+	const chi_cluster_indices range = node.get_data();
+	std::vector<std::size_t> indices;
+	indices.reserve( range.second - range.first + 1 );
+	for ( std::size_t idx = range.first; idx <= range.second; ++idx ) {
+		indices.push_back( reach_dists[idx].point_index );
+	}
+	Node<std::vector<std::size_t>> out( std::move( indices ) );
+	for ( const auto& child : node.get_children() ) {
+		out.add_child( chi_node_to_points( child, reach_dists ) );
+	}
+	return out;
+}
+}  // namespace detail
+
+// Map a Xi cluster tree (whose nodes hold (begin,end) ranges into the ordering, as
+// produced by get_chi_clusters) onto the same tree shape but with each node holding the
+// list of original point indices in its range. The nesting is preserved, so a hierarchical
+// result is as easy to consume as the flattened extract_xi -- callers no longer map
+// reach[i].point_index by hand. A node's list spans its whole range, so (mirroring
+// get_cluster_indices) a parent's list includes the points of its children.
+inline Tree<std::vector<std::size_t>> chi_tree_to_points(
+	const cluster_tree& tree, const std::vector<reachability_dist>& reach_dists ) {
+	return Tree<std::vector<std::size_t>>( detail::chi_node_to_points( tree.get_root(), reach_dists ) );
+}
+
+// Forest overload: get_chi_clusters returns a vector of cluster_trees.
+inline std::vector<Tree<std::vector<std::size_t>>> chi_tree_to_points(
+	const std::vector<cluster_tree>& trees, const std::vector<reachability_dist>& reach_dists ) {
+	std::vector<Tree<std::vector<std::size_t>>> result;
+	result.reserve( trees.size() );
+	for ( const auto& t : trees ) { result.push_back( chi_tree_to_points( t, reach_dists ) ); }
 	return result;
 }
 

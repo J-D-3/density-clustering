@@ -9,6 +9,7 @@
 
 #include "../include/optics/optics.hpp"
 #include "../include/optics/testdata.hpp"
+#include "../include/optics/io.hpp"
 
 #include <algorithm>
 #include <array>
@@ -805,6 +806,97 @@ TEST_CASE("convenience: convert_cloud + cluster_threshold + extract_xi") {
 		{ 7,6.5 },{ 8,3.0 },{ 9,2.9 },{ 10,2.8 },{ 11,10.0 },{ 12,12.0 } };
 	auto xi = optics::get_cluster_indices( reach_dists, optics::get_chi_clusters_flat( reach_dists, 0.1, 4 ) );
 	CHECK( xi.size() == 3 );
+}
+
+
+TEST_CASE("chi_tree_to_points maps ranges to point indices, preserving nesting") {
+	// Same hand-crafted ordering as chi_cluster_tree_tests_1: one tree, root {0,11}
+	// with children {2,5} and {6,10}. Position i in reach_dists has point_index i+1.
+	std::vector<optics::reachability_dist> reach_dists = {
+		{ 1,10.0 },{ 2,9.0 },{ 3,9.0 },{ 4,5.0 },
+		{ 5,5.49 },{ 6,5.0 },
+		{ 7,6.5 },
+		{ 8,3.0 },
+		{ 9,2.9 },{ 10,2.8 },
+		{ 11,10.0 },{ 12,12.0 }
+	};
+	auto trees = optics::get_chi_clusters( reach_dists, 0.1, 4 );
+	REQUIRE( trees.size() == 1 );
+
+	auto point_trees = optics::chi_tree_to_points( trees, reach_dists );
+	REQUIRE( point_trees.size() == 1 );
+	const auto& root = point_trees.front().get_root();
+
+	// Root spans the whole {0,11} range -> point indices 1..12 (parent includes children).
+	CHECK( ( root.get_data() == std::vector<std::size_t>( { 1,2,3,4,5,6,7,8,9,10,11,12 } ) ) );
+	REQUIRE( root.get_children().size() == 2 );
+	CHECK( ( root.get_children()[0].get_data() == std::vector<std::size_t>( { 3,4,5,6 } ) ) );
+	CHECK( ( root.get_children()[1].get_data() == std::vector<std::size_t>( { 7,8,9,10,11 } ) ) );
+
+	// Single-tree overload agrees with the forest overload.
+	auto one = optics::chi_tree_to_points( trees.front(), reach_dists );
+	CHECK( ( one.get_root().get_data() == root.get_data() ) );
+}
+
+
+TEST_CASE("min_cluster_frac filters small clusters to noise (cluster_labels)") {
+	using point = std::array<double, 2>;
+	// Three well-separated blobs of sizes 3, 9, 3 (15 points total).
+	std::vector<point> points = {
+		{ 100,100 },{ 102,100 },{ 101,101 },                                   // blob A (3)
+		{ 0,0 },{ 1,0 },{ 0,1 },{ 1,1 },{ 2,0 },{ 0,2 },{ 2,1 },{ 1,2 },{ 2,2 },// blob B (9)
+		{ -100,-100 },{ -102,-100 },{ -101,-101 }                              // blob C (3)
+	};
+	const std::size_t n = points.size();
+	auto reach = optics::compute_reachability_dists( points, 2, 10.0 );
+	auto clusters = optics::get_cluster_indices( reach, 10.0 );
+	REQUIRE( clusters.size() == 3 );
+
+	// min_cluster_frac = 1/3 -> min_size = 5: only the 9-point blob survives; the two
+	// 3-point blobs are filtered to noise (label -1).
+	const std::size_t min_size = static_cast<std::size_t>( ( 1.0 / 3.0 ) * static_cast<double>( n ) );
+	CHECK( min_size == 5 );
+	auto labels = optics::io::cluster_labels( n, clusters, min_size );
+	long long max_label = -1;
+	for ( const long long l : labels ) { max_label = std::max( max_label, l ); }
+	CHECK( max_label == 0 );  // exactly one surviving cluster
+	for ( const auto& c : clusters ) {
+		const bool kept = c.size() >= min_size;
+		for ( const std::size_t idx : c ) { CHECK( ( labels[idx] >= 0 ) == kept ); }
+	}
+
+	// A min size larger than any cluster makes every point noise.
+	auto all_noise = optics::io::cluster_labels( n, clusters, n );
+	for ( const long long l : all_noise ) { CHECK( l == -1 ); }
+
+	// The same size filter composes with the Xi extractor's flattened output: an
+	// impossible min size leaves nothing labeled.
+	auto xi = optics::extract_xi( points, 2, 0.05 );
+	auto xi_labels = optics::io::cluster_labels( n, xi, n + 1 );
+	for ( const long long l : xi_labels ) { CHECK( l == -1 ); }
+}
+
+
+TEST_CASE("Precompute pre-allocation guard: throws over the cap, OnDemand unaffected") {
+	const std::vector<std::array<double, 2>> centers = { { 0, 0 }, { 50, 0 } };
+	const auto points = optics::testdata::gaussian_blobs<double, 2>( centers, 100, 2.0 );
+
+	// Precompute with a 1-byte cap: the estimate dwarfs it -> throw suggesting OnDemand.
+	CHECK_THROWS_AS(
+		optics::compute_reachability_dists( points, 5, 5.0, optics::NeighborMode::Precompute, 1,
+											 optics::CoreDistMode::Scan, std::size_t{ 1 } ),
+		std::runtime_error );
+
+	// A generous cap does not throw and yields the same ordering as the default (no cap).
+	const auto capped = optics::compute_reachability_dists( points, 5, 5.0, optics::NeighborMode::Precompute, 1,
+														   optics::CoreDistMode::Scan, std::size_t{ 1 } << 40 );
+	const auto uncapped = optics::compute_reachability_dists( points, 5, 5.0, optics::NeighborMode::Precompute );
+	CHECK( ( capped == uncapped ) );
+
+	// OnDemand has no such buffer, so even a 1-byte cap is ignored.
+	const auto on_demand = optics::compute_reachability_dists( points, 5, 5.0, optics::NeighborMode::OnDemand, 0,
+															  optics::CoreDistMode::Scan, std::size_t{ 1 } );
+	CHECK( on_demand.size() == points.size() );
 }
 
 
