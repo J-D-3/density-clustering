@@ -15,7 +15,8 @@
 // layouts -- the harness reports both honestly.
 //
 // stdout (labels):  point_index,optics,soptics   (one row per point; -1 = noise)
-// stderr (timing):  TIMING n=<n> dim=<Dim> optics_ms=<..> soptics_ms=<..>
+// stderr (timing):  TIMING n=<n> dim=<Dim> eps=<generating distance> optics_ms=<..> soptics_ms=<..>
+//   (eps is emitted so an external engine can be run at the same generating distance.)
 //
 // Usage: optics_quality_compare coords.csv [min_pts=10] [chi=0.05]
 // Build in a Release config; not a ctest.
@@ -41,8 +42,12 @@ template <std::size_t Dim>
 void run( const std::vector<double>& flat, std::size_t n, std::size_t min_pts, double chi ) {
 	const auto pts = bench::pack<Dim>( flat, n );
 
+	// Compute the generating distance explicitly (outside the timed region) and emit it,
+	// so an external engine (dbscan-R) can be run at the *same* eps for a fair comparison.
+	const double eps = optics::epsilon_estimation( pts, min_pts );
+
 	sw::Stopwatch w1;
-	const auto o_reach = optics::compute_reachability_dists<double, Dim>( pts, min_pts );
+	const auto o_reach = optics::compute_reachability_dists<double, Dim>( pts, min_pts, eps );
 	const long long o_ms = static_cast<long long>( bench::ceil_ms_from_us( w1.elapsed<sw::mus>() ) );
 	const auto o_labels = optics::io::cluster_labels(
 		n, optics::get_cluster_indices( o_reach, optics::get_chi_clusters_flat( o_reach, chi, min_pts ) ) );
@@ -58,7 +63,8 @@ void run( const std::vector<double>& flat, std::size_t n, std::size_t min_pts, d
 		std::cout << i << "," << o_labels[i] << "," << s_labels[i] << "\n";
 	}
 	std::cout.flush();
-	std::cerr << "TIMING n=" << n << " dim=" << Dim << " optics_ms=" << o_ms << " soptics_ms=" << s_ms << "\n";
+	std::cerr << "TIMING n=" << n << " dim=" << Dim << " eps=" << eps
+			  << " optics_ms=" << o_ms << " soptics_ms=" << s_ms << "\n";
 }
 
 }  // namespace

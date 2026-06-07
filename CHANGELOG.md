@@ -21,10 +21,15 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
   `references.md` of citations, comparison targets, and licensing notes).
 - Benchmarks: `optics_soptics_compare` (sOPTICS vs exact OPTICS — Rand index + timing on synthetic
   normalized blobs) and `optics_quality_compare` (emits OPTICS/sOPTICS predicted labels for a CSV cloud).
-- `tools/quality_benchmark.py` — a clustering-quality harness scoring OPTICS + sOPTICS (ours) and
-  scikit-learn OPTICS + HDBSCAN against ground-truth labels with **ARI / NMI / Rand**, plus an
-  ours-vs-scikit-learn timing table (#54, and the runnable part of #53). Integration notes for the
-  external engines (ELKI, mhahsler/dbscan, sDbscan) are in `tools/README.md` (they are not bundled).
+- `tools/quality_benchmark.py` — a clustering-quality harness scoring OPTICS + sOPTICS (ours),
+  scikit-learn OPTICS + HDBSCAN, and **mhahsler/dbscan (R)** against ground-truth labels with
+  **ARI / NMI / Rand**, plus a timing table (#54, #53). dbscan-R runs as an exact-Euclidean OPTICS
+  at the *same* generating distance as ours (fair timing) when R + the `dbscan` package are present
+  (auto-detected; gracefully skipped otherwise). Remaining external engines (ELKI, sDbscan) are
+  documented in `tools/README.md`.
+- `tools/fetch_datasets.py` + `tools/run_dbscan_r.R` — fetch Franti's third-party benchmark "shape
+  sets" (Aggregation/Compound/spiral/R15/jain/flame/D31) and run mhahsler/dbscan's OPTICS+Xi; both
+  used by the quality harness.
 
 ## [0.9.2] — 2026-06-07
 
