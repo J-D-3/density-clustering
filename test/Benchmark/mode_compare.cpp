@@ -57,18 +57,18 @@ void run( const std::string& name, const std::vector<double>& flat, std::size_t 
 	const double avg = avg_neighbors<Dim>( pts, eps, stride );
 	const double gb = static_cast<double>( n ) * avg * 8.0 / 1e9;
 
-	double pre_ms = -1.0;
+	long long pre_ms = -1;
 	if ( gb <= cap_gb ) {
 		sw::Stopwatch w;
 		(void)optics::compute_reachability_dists<double, Dim>(
 			pts, min_pts, -1.0, optics::NeighborMode::Precompute, nt );
-		pre_ms = w.elapsed<sw::ms>();
+		pre_ms = static_cast<long long>( bench::ceil_ms_from_us( w.elapsed<sw::mus>() ) );
 	}
 
 	sw::Stopwatch w2;
 	(void)optics::compute_reachability_dists<double, Dim>(
 		pts, min_pts, -1.0, optics::NeighborMode::OnDemand, 1 );
-	const double od_ms = w2.elapsed<sw::ms>();
+	const long long od_ms = static_cast<long long>( bench::ceil_ms_from_us( w2.elapsed<sw::mus>() ) );
 
 	std::cout << name << "," << n << "," << Dim << "," << static_cast<long long>( avg ) << ","
 			  << gb << "," << pre_ms << "," << od_ms << "\n";

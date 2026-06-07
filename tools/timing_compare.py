@@ -18,6 +18,7 @@ Usage:
 
 import argparse
 import csv
+import math
 import os
 import subprocess
 import sys
@@ -79,7 +80,7 @@ def time_sklearn(path, min_pts):
     OPTICS(min_samples=min_pts).fit(X[:200])  # warm up import/JIT
     t = time.perf_counter()
     OPTICS(min_samples=min_pts).fit(X)
-    return (time.perf_counter() - t) * 1000.0
+    return math.ceil((time.perf_counter() - t) * 1000.0)  # round up to whole ms
 
 
 def main(argv=None):
@@ -116,7 +117,7 @@ def main(argv=None):
     print(head)
     print("-" * len(head))
     for label, n, dim, timings in rows:
-        cells = " ".join(f"{timings[m]:14.1f}" for m in methods)
+        cells = " ".join(f"{timings[m]:14.0f}" for m in methods)
         print(f"{label:14s} {n:6d} {dim:4d} {cells}")
     print("\n(ms; lower is better. Internal backends use 4 threads; sklearn is single-process.)")
 

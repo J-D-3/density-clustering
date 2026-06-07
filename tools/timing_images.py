@@ -21,6 +21,7 @@ Usage:
 
 import argparse
 import csv
+import math
 import os
 import subprocess
 import sys
@@ -75,7 +76,7 @@ def time_internal(exe, paths, min_pts):
 def timed(fn):
     t = time.perf_counter()
     fn()
-    return (time.perf_counter() - t) * 1000.0
+    return math.ceil((time.perf_counter() - t) * 1000.0)  # round up to whole ms
 
 
 def main(argv=None):
@@ -134,7 +135,7 @@ def main(argv=None):
     print(head)
     print("-" * len(head))
     for label, n, t in rows:
-        print(f"{label:10s} {n:6d} " + " ".join(f"{t[m]:15.1f}" for m in methods))
+        print(f"{label:10s} {n:6d} " + " ".join(f"{t[m]:15.0f}" for m in methods))
     print("\n(ms; lower is better. Internal backends @ 4 threads; scikit-learn single-process.")
     print(f" Same sampled RGB cloud per image. min_pts={args.min_pts}, DBSCAN eps={DBSCAN_EPS}, KMeans k={KMEANS_K}.")
     print(" k-means has no neighbor graph and is the cheapest per run; kmeans(1) is one Lloyd run,")

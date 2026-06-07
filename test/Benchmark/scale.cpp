@@ -30,11 +30,11 @@ void run( std::size_t n_points ) {
 	const unsigned nt = bench::threads();
 	sw::Stopwatch w;
 	auto rd1 = optics::compute_reachability_dists( points, min_pts, -1.0, optics::NeighborMode::Precompute, nt );
-	const auto precompute_ms = w.elapsed<sw::ms>();
+	const auto precompute_ms = bench::ceil_ms_from_us( w.elapsed<sw::mus>() );
 
 	w.restart();
 	auto rd2 = optics::compute_reachability_dists( points, min_pts, -1.0, optics::NeighborMode::OnDemand, 1 );
-	const auto ondemand_ms = w.elapsed<sw::ms>();
+	const auto ondemand_ms = bench::ceil_ms_from_us( w.elapsed<sw::mus>() );
 
 	std::cout << "  3D " << tname << " n=" << points.size()
 			  << "  precompute(x" << nt << ")=" << precompute_ms << " ms"

@@ -36,7 +36,7 @@ void time_backend( const std::string& dataset, const std::string& backend,
 	sw::Stopwatch w;
 	const auto reach = optics::compute_reachability_dists<double, Dim, Backend>(
 		pts, min_pts, -1.0, optics::NeighborMode::Precompute, nt );
-	const auto ms = w.elapsed<sw::ms>();
+	const auto ms = bench::ceil_ms_from_us( w.elapsed<sw::mus>() );
 	(void)reach;
 	std::cout << dataset << "," << pts.size() << "," << Dim << "," << backend << "," << ms << "\n";
 }

@@ -49,7 +49,7 @@ double ordering_ms( const std::vector<std::array<double, Dim>>& pts, std::size_t
 		(void)optics::compute_reachability_dists<double, Dim, optics::NanoflannBackend<double, Dim, 1000>>(
 			pts, min_pts, -1.0, optics::NeighborMode::Precompute, nt );
 	}
-	return w.elapsed<sw::ms>();
+	return static_cast<double>( bench::ceil_ms_from_us( w.elapsed<sw::mus>() ) );
 }
 
 // Mean recall + mean neighbor count of an approximate backend vs the exact one, over a
@@ -103,15 +103,15 @@ void probe( const std::string& name, const std::vector<double>& flat, std::size_
 	std::printf( "\n%s  n=%zu dim=%zu  eps=%.3g  avg_nbrs=%.0f\n",
 				 name.c_str(), n, Dim, eps, avg );
 	std::printf( "  %-16s %10s %8s %10s\n", "backend", "order_ms", "recall", "ap_nbrs" );
-	std::printf( "  %-16s %10.1f %8.3f %10.0f\n", "exact", ordering_ms<Dim>( pts, min_pts, nt, 0 ), 1.0, avg );
+	std::printf( "  %-16s %10.0f %8.3f %10.0f\n", "exact", ordering_ms<Dim>( pts, min_pts, nt, 0 ), 1.0, avg );
 
 	double rec = 0.0, an = 0.0;
 	approx_quality<Dim, 100>( pts, eps, stride, rec, an );
-	std::printf( "  %-16s %10.1f %8.3f %10.0f\n", "approx eps=0.1", ordering_ms<Dim>( pts, min_pts, nt, 100 ), rec, an );
+	std::printf( "  %-16s %10.0f %8.3f %10.0f\n", "approx eps=0.1", ordering_ms<Dim>( pts, min_pts, nt, 100 ), rec, an );
 	approx_quality<Dim, 500>( pts, eps, stride, rec, an );
-	std::printf( "  %-16s %10.1f %8.3f %10.0f\n", "approx eps=0.5", ordering_ms<Dim>( pts, min_pts, nt, 500 ), rec, an );
+	std::printf( "  %-16s %10.0f %8.3f %10.0f\n", "approx eps=0.5", ordering_ms<Dim>( pts, min_pts, nt, 500 ), rec, an );
 	approx_quality<Dim, 1000>( pts, eps, stride, rec, an );
-	std::printf( "  %-16s %10.1f %8.3f %10.0f\n", "approx eps=1.0", ordering_ms<Dim>( pts, min_pts, nt, 1000 ), rec, an );
+	std::printf( "  %-16s %10.0f %8.3f %10.0f\n", "approx eps=1.0", ordering_ms<Dim>( pts, min_pts, nt, 1000 ), rec, an );
 }
 
 }  // namespace

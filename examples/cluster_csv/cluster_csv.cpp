@@ -29,7 +29,11 @@
 
 namespace {
 using clk = std::chrono::steady_clock;
-double ms( clk::time_point a, clk::time_point b ) { return std::chrono::duration<double, std::milli>( b - a ).count(); }
+// Elapsed time rounded UP to the next whole millisecond.
+long long ms( clk::time_point a, clk::time_point b ) {
+	const auto us = std::chrono::duration_cast<std::chrono::microseconds>( b - a ).count();
+	return ( us + 999 ) / 1000;
+}
 
 // Split a CSV line into trimmed tokens.
 std::vector<std::string> split( const std::string& line ) {

@@ -6,10 +6,15 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <thread>
 
 namespace bench {
+
+// Runtime outputs are reported rounded UP to the next whole millisecond, so a
+// sub-millisecond or fractional time never reads as a smaller (or zero) value.
+inline std::uint64_t ceil_ms_from_us( std::uint64_t us ) { return ( us + 999 ) / 1000; }
 
 // Default worker-thread count for the timing harnesses. Capped at 4 so reported
 // numbers are reproducible and comparable across machines rather than scaling with

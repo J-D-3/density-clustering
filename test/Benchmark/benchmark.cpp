@@ -30,7 +30,7 @@ void run( const std::string& label, const std::vector<std::array<T, Dim>>& point
 		  std::size_t min_pts, optics::NeighborMode mode, unsigned threads ) {
 	sw::Stopwatch watch;
 	const auto reach = optics::compute_reachability_dists<T, Dim, Backend>( points, min_pts, -1.0, mode, threads );
-	const auto ms = watch.elapsed<sw::ms>();
+	const auto ms = bench::ceil_ms_from_us( watch.elapsed<sw::mus>() );
 	std::cout << "    " << label << ": " << ms << " ms"
 			  << "  (" << reach.size() << " pts ordered)" << std::endl;
 }
