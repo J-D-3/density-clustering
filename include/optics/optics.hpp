@@ -101,6 +101,78 @@ struct seed_min_heap_cmp {
 
 using seed_queue = std::priority_queue<reachability_dist, std::vector<reachability_dist>, seed_min_heap_cmp>;
 
+
+// Drives the OPTICS cluster-ordering from two providers, so the loop is shared by
+// OPTICS and sOPTICS. The neighbor/core-distance policy (backend + epsilon, Scan/Knn,
+// random projections, ...) lives entirely in the providers; this function owns only the
+// algorithm-agnostic machinery: the seed priority queue, the relaxation, lazy deletion,
+// and the ordered-list assembly.
+//   neighbors_of(idx)       -> const std::vector<std::size_t>&  : idx's neighbor indices.
+//        CONTRACT: the returned reference stays valid only until the next neighbors_of
+//        call, so an OnDemand provider may hand back a single reused buffer.
+//   core_dist_of(idx, nbrs) -> std::optional<double>            : idx's core distance,
+//        or nullopt when UNDEFINED (fewer than min_pts neighbors).
+//   prof : phase profiler; the relax and loop phases are accumulated here. The caller
+//        times index_build/precompute and calls prof.report() after this returns.
+template <class T, std::size_t Dim, class NeighborsOf, class CoreDistOf>
+std::vector<reachability_dist> optics_order(
+		const std::vector<Point<T, Dim>>& points,
+		NeighborsOf&& neighbors_of, CoreDistOf&& core_dist_of, PhaseProfiler& prof ) {
+	const std::size_t n = points.size();
+
+	std::vector<char> processed( n, 0 );
+	std::vector<std::size_t> ordered_list;
+	ordered_list.reserve( n );
+	std::vector<double> reachability( n, -1.0 );
+
+	// Reused across points; drained to empty whenever an expansion finishes.
+	seed_queue seeds;
+	const auto relax_neighbors = [&]( std::size_t idx, const std::vector<std::size_t>& nbrs, double core_dist ) {
+		[[maybe_unused]] auto _s = prof.scope( prof.relax );
+		for ( const std::size_t o : nbrs ) {
+			if ( processed[o] ) { continue; }
+			const double new_rd = std::max( core_dist, detail::dist( points[idx], points[o] ) );
+			if ( reachability[o] < 0.0 || new_rd < reachability[o] ) {
+				reachability[o] = new_rd;  // authoritative; the prior heap entry becomes stale
+				seeds.push( reachability_dist( o, new_rd ) );
+			}
+		}
+	};
+
+	const auto _t_loop = prof.now();
+	for ( std::size_t point_idx = 0; point_idx < n; point_idx++ ) {
+		if ( processed[point_idx] ) { continue; }
+		processed[point_idx] = 1;
+		ordered_list.push_back( point_idx );
+
+		const auto& neighbor_indices = neighbors_of( point_idx );
+		const auto core_dist = core_dist_of( point_idx, neighbor_indices );
+		if ( core_dist.has_value() ) { relax_neighbors( point_idx, neighbor_indices, *core_dist ); }
+
+		while ( !seeds.empty() ) {
+			const reachability_dist s = seeds.top();
+			seeds.pop();
+			// Lazy deletion: skip entries already processed or superseded by a smaller push.
+			if ( processed[s.point_index] || s.reach_dist != reachability[s.point_index] ) { continue; }
+			processed[s.point_index] = 1;
+			ordered_list.push_back( s.point_index );
+
+			const auto& s_neighbor_indices = neighbors_of( s.point_index );
+			const auto s_core_dist = core_dist_of( s.point_index, s_neighbor_indices );
+			if ( s_core_dist.has_value() ) { relax_neighbors( s.point_index, s_neighbor_indices, *s_core_dist ); }
+		}
+	}
+	assert( ordered_list.size() == n );
+	prof.add( prof.loop, _t_loop );
+
+	std::vector<reachability_dist> result;
+	result.reserve( n );
+	for ( const std::size_t point_idx : ordered_list ) {
+		result.emplace_back( point_idx, reachability[point_idx] );
+	}
+	return result;
+}
+
 }  // namespace detail
 
 
@@ -270,11 +342,6 @@ std::vector<reachability_dist> compute_reachability_dists(
 	_prof.add( _prof.index_build, _t_build );
 	const std::size_t n = points.size();
 
-	std::vector<char> processed( n, 0 );
-	std::vector<std::size_t> ordered_list;
-	ordered_list.reserve( n );
-	std::vector<double> reachability( n, -1.0 );
-
 	// Neighbor acquisition: precompute-all (parallel) or on-demand.
 	const auto _t_pre = _prof.now();
 	std::vector<std::vector<std::size_t>> neighbors;
@@ -333,52 +400,12 @@ std::vector<reachability_dist> compute_reachability_dists(
 		return detail::compute_core_dist( points[idx], points, nbrs, min_pts );
 	};
 
-	// Reused across points; drained to empty whenever an expansion finishes.
-	detail::seed_queue seeds;
-	const auto relax_neighbors = [&]( std::size_t idx, const std::vector<std::size_t>& nbrs, double core_dist ) {
-		[[maybe_unused]] auto _s = _prof.scope( _prof.relax );
-		for ( const std::size_t o : nbrs ) {
-			if ( processed[o] ) { continue; }
-			const double new_rd = std::max( core_dist, detail::dist( points[idx], points[o] ) );
-			if ( reachability[o] < 0.0 || new_rd < reachability[o] ) {
-				reachability[o] = new_rd;  // authoritative; the prior heap entry becomes stale
-				seeds.push( reachability_dist( o, new_rd ) );
-			}
-		}
-	};
-
-	const auto _t_loop = _prof.now();
-	for ( std::size_t point_idx = 0; point_idx < n; point_idx++ ) {
-		if ( processed[point_idx] ) { continue; }
-		processed[point_idx] = 1;
-		ordered_list.push_back( point_idx );
-
-		const auto& neighbor_indices = neighbors_of( point_idx );
-		const auto core_dist = core_dist_of( point_idx, neighbor_indices );
-		if ( core_dist.has_value() ) { relax_neighbors( point_idx, neighbor_indices, *core_dist ); }
-
-		while ( !seeds.empty() ) {
-			const reachability_dist s = seeds.top();
-			seeds.pop();
-			// Lazy deletion: skip entries already processed or superseded by a smaller push.
-			if ( processed[s.point_index] || s.reach_dist != reachability[s.point_index] ) { continue; }
-			processed[s.point_index] = 1;
-			ordered_list.push_back( s.point_index );
-
-			const auto& s_neighbor_indices = neighbors_of( s.point_index );
-			const auto s_core_dist = core_dist_of( s.point_index, s_neighbor_indices );
-			if ( s_core_dist.has_value() ) { relax_neighbors( s.point_index, s_neighbor_indices, *s_core_dist ); }
-		}
-	}
-	assert( ordered_list.size() == n );
-	_prof.add( _prof.loop, _t_loop );
+	// All neighbor/core-distance policy is now captured in the two closures above;
+	// the algorithm-agnostic ordering machinery lives in detail::optics_order (shared
+	// with sOPTICS). index_build/precompute were timed above; the helper accumulates
+	// the relax/loop phases into _prof, and we report once it returns.
+	auto result = detail::optics_order<T, Dim>( points, neighbors_of, core_dist_of, _prof );
 	_prof.report( n );
-
-	std::vector<reachability_dist> result;
-	result.reserve( n );
-	for ( const std::size_t point_idx : ordered_list ) {
-		result.emplace_back( point_idx, reachability[point_idx] );
-	}
 	return result;
 }
 
