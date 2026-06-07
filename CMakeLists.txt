@@ -23,8 +23,16 @@ target_compile_features(optics INTERFACE cxx_std_20)
 target_link_libraries(optics INTERFACE Threads::Threads)
 
 if(OPTICS_ENABLE_BOOST_RTREE)
+    # CMake >= 3.30 removed the bundled FindBoost module; opting into CMP0167 NEW
+    # consumes Boost's own BoostConfig (CONFIG mode) and silences the deprecation
+    # warning. Guarded so older CMake (which lacks the policy) still configures.
+    if(POLICY CMP0167)
+        cmake_policy(SET CMP0167 NEW)
+    endif()
     find_package(Boost REQUIRED)
-    target_link_libraries(optics INTERFACE Boost::boost)
+    # Boost.Geometry is header-only; Boost::headers is provided by both BoostConfig
+    # and the legacy FindBoost module, unlike the FindBoost-only Boost::boost.
+    target_link_libraries(optics INTERFACE Boost::headers)
     target_compile_definitions(optics INTERFACE OPTICS_ENABLE_BOOST_RTREE)
 endif()
 
