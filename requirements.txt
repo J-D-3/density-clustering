@@ -9,4 +9,4 @@ matplotlib>=3.6        # visualize.py, compare_algorithms.py (plots)
 scipy>=1.10            # validate_sklearn.py (Spearman rank correlation)
 scikit-learn>=1.2      # compare_algorithms.py, validate_sklearn.py (k-means/DBSCAN/OPTICS)
 Pillow>=9.0            # examples/color_clustering (image I/O) only
-# plotly>=5.0          # optional: interactive 3-D HTML in the color example
+plotly>=5.0            # optional: interactive 3-D HTML in the color example
