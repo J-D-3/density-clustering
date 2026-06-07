@@ -992,6 +992,83 @@ TEST_CASE("property/fuzz: OPTICS-output invariants hold over random clouds") {
 }
 
 
+// Sum of all eps-neighborhood sizes (what Precompute caches) and the largest single
+// neighborhood (what OnDemand holds at a time), for a cloud read straight from the backend.
+template <std::size_t Dim>
+static std::pair<std::size_t, std::size_t> neighbor_cache_sizes( std::size_t n, double box, double eps, unsigned seed ) {
+	const auto pts = optics::testdata::uniform_noise<double, Dim>( n, 0.0, box, seed );
+	const optics::NanoflannBackend<double, Dim> backend( pts );
+	std::size_t total = 0, max_one = 0;
+	std::vector<std::size_t> buf;
+	for ( const auto& p : pts ) {
+		buf.clear();
+		backend.radius_search( p, eps, buf );
+		total += buf.size();
+		max_one = std::max( max_one, buf.size() );
+	}
+	return { total, max_one };
+}
+
+TEST_CASE("memory invariant: Precompute cache grows with n; OnDemand holds one neighborhood") {
+	// Two clouds at the SAME point density (box area scaled with n), so the average
+	// neighborhood is constant. The Precompute cache (sum of all neighborhoods) then grows
+	// ~linearly with n, while the OnDemand footprint (one neighborhood) stays bounded. This
+	// is the data-structure invariant that motivated the OnDemand default; asserting the
+	// sizes directly is deterministic and platform-independent (no peak-RSS sampling).
+	const double eps = 5.0;
+	const std::size_t n1 = 2000, n2 = 8000;       // 4x the points
+	const double box1 = 50.0, box2 = 100.0;       // 4x the area (2-D) -> same density
+
+	const auto [pre1, od1] = neighbor_cache_sizes<2>( n1, box1, eps, 11u );
+	const auto [pre2, od2] = neighbor_cache_sizes<2>( n2, box2, eps, 12u );
+
+	// OnDemand holds a single neighborhood: tiny next to the full Precompute cache.
+	CHECK( od1 * 40 < pre1 );
+	CHECK( od2 * 40 < pre2 );
+
+	// Precompute cache scales ~linearly with n (4x points -> ~4x cached entries).
+	const double pre_ratio = static_cast<double>( pre2 ) / static_cast<double>( pre1 );
+	CHECK( pre_ratio > 2.5 );
+	CHECK( pre_ratio < 6.0 );
+
+	// OnDemand's largest neighborhood stays bounded at fixed density (no ~4x growth).
+	const double od_ratio = static_cast<double>( od2 ) / static_cast<double>( od1 );
+	CHECK( od_ratio < 2.5 );
+}
+
+
+TEST_CASE("backend matrix: clustering is consistent across neighbor-search backends") {
+	static const std::size_t N = 2;
+	const std::vector<std::array<double, N>> centers = { { 0, 0 }, { 60, 0 }, { 30, 50 } };
+	const auto points = optics::testdata::gaussian_blobs<double, N>( centers, 150, 1.5 );
+
+	// Baseline: exact nanoflann -> a valid ordering with the three dense clusters.
+	const auto reach_nano = optics::compute_reachability_dists<double, N>( points, 10, 10.0 );
+	check_ordering_invariants( reach_nano, points.size() );
+	const auto clusters_nano = optics::get_cluster_indices( reach_nano, 10.0 );
+	std::size_t big_nano = 0;
+	for ( const auto& c : clusters_nano ) { if ( c.size() >= 50 ) { ++big_nano; } }
+	CHECK( big_nano == 3 );
+
+	// Approximate nanoflann: still a valid ordering recovering the same three clusters
+	// (low-D recall ~1.0). Not asserted bit-equal -- it is, by design, an approximation.
+	const auto reach_approx =
+		optics::compute_reachability_dists<double, N, optics::ApproxNanoflannBackend<double, N>>( points, 10, 10.0 );
+	check_ordering_invariants( reach_approx, points.size() );
+	const auto clusters_approx = optics::get_cluster_indices( reach_approx, 10.0 );
+	std::size_t big_approx = 0;
+	for ( const auto& c : clusters_approx ) { if ( c.size() >= 50 ) { ++big_approx; } }
+	CHECK( big_approx == 3 );
+
+#ifdef OPTICS_ENABLE_BOOST_RTREE
+	// The exact Boost backend must match exact nanoflann bit-for-bit.
+	const auto reach_boost =
+		optics::compute_reachability_dists<double, N, optics::BoostRTreeBackend<double, N>>( points, 10, 10.0 );
+	CHECK( ( reach_nano == reach_boost ) );
+#endif
+}
+
+
 #ifdef OPTICS_ENABLE_BOOST_RTREE
 // Only built when the optional Boost backend is enabled. Verifies that the Boost
 // R*-tree backend is interchangeable with nanoflann (issue #27): identical

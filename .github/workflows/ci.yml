@@ -6,6 +6,12 @@ on:
   pull_request:
 
 jobs:
+  # Backend matrix (issue #43): the "backend matrix" unit test instantiates
+  # compute_reachability_dists with both NanoflannBackend and ApproxNanoflannBackend, so
+  # the approximate path is built and exercised in every job below (all 3 OSes). The
+  # exact BoostRTreeBackend path is compiled and asserted bit-identical in the
+  # build-test-boost job (which enables OPTICS_ENABLE_BOOST_RTREE). No separate approx
+  # job is needed -- it would only re-run the same suite.
   build-test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
