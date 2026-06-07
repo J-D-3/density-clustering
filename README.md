@@ -24,30 +24,39 @@ OPTICS is a density-based clustering algorithm. It does **not** need the number 
 | **DBSCAN** | no | yes | yes | no (one global eps) | no | fast | yes |
 | **OPTICS** | no | yes | yes | yes (ordering across scales) | yes (ξ) | slower (query-bound) | yes |
 
-**Be honest about the trade-offs.** If your clusters are roughly convex and you know *k*, **k-means** is far faster and perfectly adequate. If a single density threshold separates your clusters, **DBSCAN** is simpler and quick. Reach for **OPTICS** when you don't know *k*, when clusters sit at *different* densities (where one DBSCAN `eps` can't win), or when you want to *see* the cluster hierarchy via the reachability plot before committing to a cut. OPTICS is the most general of the three — and the most expensive, its cost dominated by neighbor queries. You can independently sanity-check our results against scikit-learn's OPTICS with `tools/validate_sklearn.py`.
-
+**Be honest about the trade-offs.** If your clusters are roughly convex and you know *k*, **k-means** is far faster and perfectly adequate. If a single density threshold separates your clusters, **DBSCAN** is simpler and quick. Reach for **OPTICS** when you don't know *k*, when clusters sit at *different* densities (where one DBSCAN `eps` can't win), or when you want to *see* the cluster hierarchy via the reachability plot before committing to a cut. OPTICS is the most general of the three — and the most expensive. Its runtime cost dominated by neighbor queries and due to its algorithmic structure it cannot be as fast as k-means. That said, we can be much faster than other optics implementations, even than DBSCAN, and have even faster neighborhood-search-strategie on the roadmap.
 → Quantitative runtime comparisons (this library's backends vs scikit-learn OPTICS, DBSCAN, and k-means, across sample sizes and dimensions) are in **[`perf/README.md`](perf/README.md)**.
 
 ## Quickstart: cluster your own data
+### C++ integration
+This library is header-only. Simply add `include/` to your include path and add `#include <optics/optics.hpp>`.
+Then, one call of `optics::extract_xi()` is all you need - see below for more details.
 
-You don't have to write any C++ to try it — build the bundled example and point it at a CSV (one numeric row per point, with a `x0,x1,...` header; extra trailing columns are ignored).
+### Python integration
+Build + usage in **[`python/README.md`](python/README.md)**.
+
+### Testing on CSV data & visualization 
+You don't have to write any C++ to try it — build the bundled example and point it at a point cloud in CSV format (one numeric row per point, with a `x0,x1,...` header; extra trailing columns are ignored).
 
 ```sh
 # 1. Build the example (MSVC shown; use linux-gcc / linux-clang on Linux/macOS)
 cmake --preset msvc
 cmake --build --preset msvc --target cluster_csv
-python tools/datasets.py --name moons --n 1500 --out data/moons.csv   # or bring your own CSV
 
-# 2. Cluster it  ->  writes <out>_points.csv (labels) and <out>_reach.csv (the plot)
+# 2. Use our tool datasets.py to generate the 'moons' dataset (see example above) in csv format.
+#    Alternatively: Bring your own point cloud in csv format and use it in step 3. 
+python tools/datasets.py --name moons --n 1500 --out data/moons.csv
+
+# 3. Cluster it  ->  writes <out>_points.csv (labels) and <out>_reach.csv (the plot)
 build/examples/Release/cluster_csv data/moons.csv data/moons 10        # 10 = min_pts
 
-# 3. See it
+# 4. See it
 python tools/visualize.py --points data/moons_points.csv --reach data/moons_reach.csv
 ```
 
 On Linux/macOS the binary is `build/examples/cluster_csv`. Python deps for the tools: `pip install -r requirements.txt`. See [`examples/cluster_csv/README.md`](examples/cluster_csv/README.md) for all options, and **Reading the reachability plot** / **Choosing parameters** below.
 
-## Usage
+## Regular usage from a C++ application
 
 A point is a `std::array<T, Dim>` of Cartesian coordinates (`T` is `float` or `double`); a cloud is a `std::vector` of those.
 
@@ -72,7 +81,7 @@ int main() {
 }
 ```
 
-The full signature lets you choose the backend, neighbor-acquisition strategy, and thread count:
+If you need more dials and knobs: The full signature of the `compute_reachability_dists` lets you choose the backend, neighbor-acquisition strategy, and thread count:
 
 ```cpp
 optics::compute_reachability_dists<T, Dim, Backend>(
@@ -85,7 +94,7 @@ optics::compute_reachability_dists<T, Dim, Backend>(
 ### Convenience helpers
 
 - `optics::cluster_dbscan(points, min_pts, threshold)` — compute the ordering and cut at a threshold in one call (returns one index list per cluster).
-- `optics::extract_xi(reach_dists, chi, min_pts)` — Xi (steep-area) clusters as point-index lists.
+- `optics::extract_xi(reach_dists, chi, min_pts)` — Xi (steep-area) clusters as point-index lists - without the hierarchy information the tree provides.
 - `optics::convert_cloud<float>(int_points)` — convert an integer/byte cloud (e.g. `uint8` color data) to a floating-point cloud, since `T` must be `float`/`double`.
 
 ### Python (optional binding)
@@ -102,7 +111,8 @@ Build + usage in **[`python/README.md`](python/README.md)**. For data already on
 
 ### Visualizing results
 
-The core writes no images; export CSV and render with the bundled script (matplotlib):
+The core writes no images; export CSV and render with the bundled script (matplotlib).
+After processing a point cloud `points` into a rachability distances `reach` and  `labels` as shown above, you can export these via the `optics::io::` functions like this:
 
 ```cpp
 #include <optics/io.hpp>
@@ -110,6 +120,8 @@ auto labels = optics::io::cluster_labels(points.size(), clusters);
 optics::io::export_points_csv("points.csv", points, labels);   // any dimension
 optics::io::export_reachability_csv("reach.csv", reach);
 ```
+
+And have them plotted through the shipped python scripts:
 
 ```sh
 python tools/visualize.py --points points.csv --reach reach.csv --out plot.png
@@ -132,13 +144,13 @@ OPTICS doesn't hand you clusters directly — it produces a *reachability plot*:
 - **`min_pts`** (required) — how many neighbors make a point "core". Higher values smooth the plot and ignore small/noisy groups; lower values are more sensitive. A common starting point is `2 × dim` to `~20`; raise it if the plot is jagged, lower it if real small clusters get swallowed.
 - **`epsilon`** (optional, auto-estimated when `≤ 0`) — the largest neighborhood radius considered. It mainly bounds cost and memory: large enough captures all structure; too small truncates the plot (UNDEFINED reachability, shown as full-height bars). Leave it auto unless you need to cap work on huge clouds.
 - **`threshold`** (flat cut) — the reachability height at which valleys become clusters. Pick it by *looking at the plot*: just under the valley floors you care about. Smaller → tighter, more clusters; larger → fewer, looser clusters.
-- **`chi`** (ξ method) — relative steepness (e.g. `0.05`) that delimits a cluster's walls. Use ξ instead of a flat threshold when clusters live at different densities.
+- **`chi`** (ξ method) — relative steepness (e.g. `0.05`) that delimits a cluster's walls. Use ξ instead of a flat threshold when clusters live at different densities. It will output a hierarchical ordering (a tree) of clusters, which can be contained in oneanother.
 
 For domain-specific tuning and gotchas on image/color data (flat-color regions, `eps` in RGB units, separating anti-aliasing/JPEG "bridge" colors), see **[`examples/color_clustering/README.md`](examples/color_clustering/README.md)**.
 
 ## Performance
 
-OPTICS comfortably handles **millions** of low-dimensional points (~6 s for 1e6 3-D points on a 22-thread desktop). Cost is dominated by neighbor queries, so it is **query-bound** and high dimensionality is expensive (the curse of dimensionality). On *dense* data (e.g. flat-color images) neighborhoods grow with n and the ordering tends toward **O(n²)** in both time and memory — keep `epsilon` modest, use `OnDemand` mode, or downsample. On identical clouds this library is **one to three orders of magnitude faster than scikit-learn's OPTICS**, and competitive with scikit-learn's DBSCAN, while k-means (no neighbor graph) remains the cheapest per run.
+OPTICS comfortably handles **millions** of low-dimensional points (~6 s for 1e6 3-D points on a 4-core desktop). Computation time is dominated by neighbor queries, so it is **query-bound** and high dimensionality is expensive (the curse of dimensionality). On *dense* data (e.g. flat-color images) neighborhoods grow with n and the ordering tends toward **O(n²)** in both time and memory — keep `epsilon` modest, use `OnDemand` mode, or downsample. On identical clouds this library is **one to three orders of magnitude faster than scikit-learn's OPTICS**, and competitive with scikit-learn's DBSCAN, while k-means (no neighbor graph) remains the cheapest per run.
 
 Tuning knobs: **`OnDemand`** (the default — lean memory, and faster on dense clouds) vs **`Precompute`** (opt-in parallel cache, faster on sparse/low-density clouds but O(n × neighbors) memory); the thread count (Precompute only); and the backend — exact `NanoflannBackend`, `ApproxNanoflannBackend` (helps only in high dimensions, where search — not neighborhood processing — dominates), or the optional Boost R\*-tree.
 
@@ -159,7 +171,8 @@ None required: [nanoflann](https://github.com/jlblancoc/nanoflann) (BSD 2-Clause
 
 ## Building & testing
 
-Header-only — just add `include/` to your include path and `#include <optics/optics.hpp>`. To build the tests/benchmark (CMake ≥ 3.21, MSVC 2022 / GCC 10+ / Clang 13+):
+Header-only — just add `include/` to your include path and `#include <optics/optics.hpp>`.
+To build the tests/benchmark (CMake ≥ 3.21, MSVC 2022 / GCC 10+ / Clang 13+):
 
 ```sh
 cmake --preset linux-gcc      # or: linux-clang, msvc
