@@ -8,6 +8,8 @@ A header-only C++20 implementation of the **OPTICS** density-based clustering al
 
 The library has **no mandatory external dependencies**: only the vendored `nanoflann` (in `include/optics/`) plus the standard library. Boost is an *optional* alternative backend, off by default.
 
+For project history and direction: `CHANGELOG.md` (release notes, current version 0.9.1) and `docs/ROADMAP-*.md` (planned work — e.g. the `chi_tree_to_points` helper is queued in `docs/ROADMAP-post-0.9.1.md`). `THIRD-PARTY-LICENSES.md` covers vendored-dep licensing; `CITATION.cff` is the citation metadata.
+
 ## Build & test
 
 Requires a C++20 compiler (MSVC 2022, GCC 10+, or Clang 13+) and CMake ≥ 3.21. Use the presets:
@@ -29,7 +31,7 @@ ctest --test-dir build -C Release --output-on-failure
 - **Unit suite uses [doctest](https://github.com/doctest/doctest)** (`test/third_party/doctest.h`, vendored, test-only): `optics_tests` is `TEST_CASE`/`CHECK`-based, so assertions run regardless of `NDEBUG`. Note: doctest can't decompose `&&`/`||` in a `CHECK` — wrap such expressions in parens. The separate `optics_visual_test` still verifies via `assert()`, so it keeps `/UNDEBUG` (MSVC) / `-UNDEBUG` (GCC/Clang).
 - **Optional Boost backend:** configure with `-DOPTICS_ENABLE_BOOST_RTREE=ON` (needs Boost.Geometry). This compiles `BoostRTreeBackend` and an `#ifdef`-gated equivalence test. Boost is exercised in CI (`.github/workflows/ci.yml`), not in the default build.
 - **Benchmarks (Release, none are ctests):** `optics_benchmark` — general benchmark; optional integer arg scales the point counts (`optics_benchmark 4`). `optics_perf` — nanobench perf-regression harness, emits `optics_perf.csv`. `optics_scale` — large-scale (1e6–1e7) 3-D timing harness.
-- **Examples:** built when `OPTICS_BUILD_EXAMPLES` is ON (default for a top-level build). `optics_color` (`examples/color_clustering/`) clusters a 3-D RGB color space; see that dir's `README.md` and the companion Python scripts. Toggle build scope with `OPTICS_BUILD_TESTS` / `OPTICS_BUILD_EXAMPLES`; `OPTICS_INSTALL` adds install + `find_package(optics)` / FetchContent config.
+- **Examples:** built when `OPTICS_BUILD_EXAMPLES` is ON (default for a top-level build). `optics_color` (`examples/color_clustering/`) clusters a 3-D RGB color space; `cluster_csv` (`examples/cluster_csv/`) is a generic CSV cloud clusterer (2/3/4/16-D). Each dir has its own `README.md` and companion Python scripts. Toggle build scope with `OPTICS_BUILD_TESTS` / `OPTICS_BUILD_EXAMPLES`; `OPTICS_BUILD_PYTHON` (OFF) builds the optional pybind11 NumPy binding under `python/` (see `python/README.md`); `OPTICS_INSTALL` adds install + `find_package(optics)` / FetchContent config.
 - **Local toolchain note:** on the original dev machine only VS2022 is installed (no g++/standalone cmake on PATH); use its bundled cmake at `…\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe`.
 
 ## Architecture & data flow
@@ -41,7 +43,7 @@ The pipeline lives under `include/optics/`. Public entry point is `optics.hpp`.
    - Threshold cut: `get_cluster_indices(reach_dists, threshold)` → flat clusters (noise → singletons; a deliberate simplification of the paper's ExtractDBSCAN, which also used core-distance).
    - Xi / steep-area: `get_chi_clusters_flat(...)` → flat `(begin,end)` ranges; `get_chi_clusters(...)` builds the nested `cluster_tree` (`tree.hpp`). This is paper Defs 9–11 / Fig. 19 and the most subtle code; its behavior is pinned by the `chi_test_*` cases.
    - One-call convenience wrappers, both `(points, min_pts, [param])`: `cluster_threshold(points, min_pts, threshold = auto)` (compute + flat cut; the paper's ExtractDBSCAN — `threshold < 0` ⇒ `detail::default_threshold`, a high reachability percentile; `cluster_dbscan` is a `[[deprecated]]` alias), `extract_xi(points, min_pts, chi = 0.05)` (compute + Xi, flattened — use `get_chi_clusters` for the tree), and `convert_cloud<Out>(in)` to lift an integer/byte cloud (e.g. `uint8` color data) to `float`/`double` before clustering.
-3. **Inspection (optional, no rendering in C++):** `io.hpp` exports dimension-agnostic CSV (`export_points_csv` with `cluster_labels`, `export_reachability_csv`); `tools/visualize.py` renders 2D/3D/PCA scatter + reachability plots with matplotlib.
+3. **Inspection (optional, no rendering in C++):** `io.hpp` exports dimension-agnostic CSV (`export_points_csv` with `cluster_labels`, `export_reachability_csv`); `tools/visualize.py` renders 2D/3D/PCA scatter + reachability plots with matplotlib. The `tools/` dir has its own `README.md` and further Python helpers (synthetic `datasets.py`, scikit-learn cross-checks `validate_sklearn.py`, algorithm-comparison figures `compare_algorithms.py`).
 
 ### Neighbor-search backend seam
 Backends satisfy the `NeighborSearch` C++20 concept (`backend.hpp`): they ingest the cloud once at construction and answer `radius_search(point, r, out)` with **no per-query point conversion**.
