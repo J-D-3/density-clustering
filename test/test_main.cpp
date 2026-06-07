@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <iostream>
 #include <optional>
 #include <random>
@@ -897,6 +898,97 @@ TEST_CASE("Precompute pre-allocation guard: throws over the cap, OnDemand unaffe
 	const auto on_demand = optics::compute_reachability_dists( points, 5, 5.0, optics::NeighborMode::OnDemand, 0,
 															  optics::CoreDistMode::Scan, std::size_t{ 1 } );
 	CHECK( on_demand.size() == points.size() );
+}
+
+
+TEST_CASE("epsilon_estimation_knee: opt-in k-distance knee estimator") {
+	// Two dense, well-separated blobs (each >> min_pts), so every point's k-distance is
+	// the small within-blob scale -- the knee sits there, far below the 100-unit gap.
+	const std::vector<std::array<double, 2>> centers = { { 0, 0 }, { 100, 0 } };
+	const auto points = optics::testdata::gaussian_blobs<double, 2>( centers, 50, 1.0 );
+
+	const double eps = optics::epsilon_estimation_knee( points, 5 );
+	CHECK( eps > 0.0 );
+	CHECK( std::isfinite( eps ) );
+	CHECK( eps < 50.0 );  // within-cluster scale, well below the inter-blob gap
+
+	// It is a usable generating distance (the ordering is well-formed with it).
+	const auto reach = optics::compute_reachability_dists( points, 5, eps );
+	CHECK( reach.size() == points.size() );
+
+	// Degenerate: fewer points than min_pts falls back to the uniform estimator.
+	const std::vector<std::array<double, 2>> few = { { 0, 0 }, { 1, 0 } };
+	CHECK( std::isfinite( optics::epsilon_estimation_knee( few, 5 ) ) );
+}
+
+
+// Generic OPTICS-output invariants over a cluster-ordering. Written against the
+// reachability_dist contract (not a specific algorithm) so approximate variants
+// (e.g. sOPTICS, #50) can reuse them instead of duplicating.
+static void check_ordering_invariants( const std::vector<optics::reachability_dist>& reach, std::size_t n ) {
+	CHECK( reach.size() == n );
+	if ( n == 0 ) { return; }
+	CHECK( reach.front().reach_dist < 0.0 );  // first entry is always UNDEFINED
+	std::vector<char> seen( n, 0 );
+	for ( const auto& r : reach ) {
+		// reachability is either UNDEFINED (-1) or a finite, non-negative distance.
+		const bool ok = ( r.reach_dist < 0.0 ) || ( r.reach_dist >= 0.0 && std::isfinite( r.reach_dist ) );
+		CHECK( ok );
+		REQUIRE( r.point_index < n );
+		CHECK( seen[r.point_index] == 0 );  // each point appears exactly once
+		seen[r.point_index] = 1;
+	}
+	std::size_t covered = 0;
+	for ( const char c : seen ) { covered += static_cast<std::size_t>( c ); }
+	CHECK( covered == n );  // the ordering is a permutation of 0..n-1
+}
+
+template <std::size_t Dim>
+static void fuzz_invariants_for_dim( unsigned n_seeds ) {
+	for ( unsigned s = 0; s < n_seeds; ++s ) {
+		const std::size_t n = 25 + s * 13;
+		const auto pts = optics::testdata::uniform_noise<double, Dim>( n, 0.0, 100.0, 100u + s );
+		for ( const std::size_t min_pts : { std::size_t{ 2 }, std::size_t{ 6 } } ) {
+			const auto reach = optics::compute_reachability_dists( pts, min_pts );
+			check_ordering_invariants( reach, n );
+
+			// A flat threshold cut is a full partition: every point exactly once.
+			const auto cut = optics::get_cluster_indices( reach, optics::detail::default_threshold( reach ) );
+			std::vector<int> count( n, 0 );
+			for ( const auto& c : cut ) {
+				for ( const std::size_t idx : c ) { REQUIRE( idx < n ); count[idx]++; }
+			}
+			for ( const int k : count ) { CHECK( k == 1 ); }
+
+			// Xi flat clusters: valid (begin<=end<n) ranges; extracted index lists in-range.
+			const auto flat = optics::get_chi_clusters_flat( reach, 0.05, min_pts );
+			for ( const auto& rng : flat ) {
+				CHECK( rng.first <= rng.second );
+				REQUIRE( rng.second < reach.size() );
+			}
+			const auto xi = optics::get_cluster_indices( reach, flat );
+			for ( const auto& c : xi ) {
+				CHECK( !c.empty() );
+				for ( const std::size_t idx : c ) { CHECK( idx < n ); }
+			}
+		}
+	}
+}
+
+TEST_CASE("property/fuzz: OPTICS-output invariants hold over random clouds") {
+	fuzz_invariants_for_dim<2>( 8 );
+	fuzz_invariants_for_dim<3>( 6 );
+	fuzz_invariants_for_dim<16>( 2 );  // a couple of high-D cases for breadth
+
+	// Also exercise structured (blobby) clouds, not just uniform noise.
+	const std::vector<std::array<double, 2>> centers = { { 0, 0 }, { 40, 0 }, { 20, 35 } };
+	const auto blobs = optics::testdata::gaussian_blobs<double, 2>( centers, 80, 1.5 );
+	const auto reach = optics::compute_reachability_dists( blobs, 5 );
+	check_ordering_invariants( reach, blobs.size() );
+
+	// Empty cloud: a well-formed empty ordering.
+	const std::vector<std::array<double, 2>> empty;
+	check_ordering_invariants( optics::compute_reachability_dists( empty, 3 ), 0 );
 }
 
 

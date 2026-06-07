@@ -10,12 +10,14 @@
 #include "version.hpp"
 #include "detail/math.hpp"
 #include "detail/thread_pool.hpp"
+#include "detail/profile.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <optional>
 #include <queue>
 #include <sstream>
@@ -165,6 +167,59 @@ double epsilon_estimation( const std::vector<Point<T, dimension>>& points, std::
 }
 
 
+// Alternative generating-distance heuristic: the k-distance knee (the classic DBSCAN
+// rule of thumb). Unlike epsilon_estimation, which assumes a uniform density over the
+// bounding box and so over-estimates epsilon on clustered data, this looks at the actual
+// k-nearest-neighbor (k = min_pts) distances: sort them ascending and take the "knee" --
+// the point of maximum distance to the chord joining the first and last sample
+// (Kneedle-style). Below the knee points sit inside dense regions; above it they are
+// sparse/noise, so the knee separates the two scales without the uniform-density bias.
+//
+// Opt-in: callers pass the result as `epsilon` to compute_reachability_dists; the default
+// path is unchanged. Requires a backend modeling KnnCoreDist (e.g. NanoflannBackend).
+template <class T, std::size_t Dim, class Backend = NanoflannBackend<T, Dim>>
+double epsilon_estimation_knee( const std::vector<std::array<T, Dim>>& points, std::size_t min_pts ) {
+	static_assert( std::is_floating_point_v<T>, "epsilon_estimation_knee: coordinate type 'T' must be float or double" );
+	static_assert( Dim >= 1, "epsilon_estimation_knee: dimension must be >= 1" );
+	static_assert( KnnCoreDist<Backend, T, Dim>,
+		"epsilon_estimation_knee requires a backend modeling KnnCoreDist (e.g. NanoflannBackend)" );
+	if ( min_pts < 1 ) { throw std::invalid_argument( "epsilon_estimation_knee: min_pts must be >= 1" ); }
+	// Too few points for a k-distance curve: defer to the uniform-density heuristic.
+	if ( points.size() <= min_pts ) { return epsilon_estimation( points, min_pts ); }
+
+	// Collect each point's k-distance (distance to its min_pts-th NN). A huge radius makes
+	// the backend's radius cap inert, so this is a plain k-NN distance for every point.
+	const Backend backend( points );
+	const T no_cap = std::numeric_limits<T>::max();
+	std::vector<double> k_dist;
+	k_dist.reserve( points.size() );
+	for ( const auto& p : points ) {
+		const auto cd = backend.knn_core_dist( p, min_pts, no_cap );
+		if ( cd.has_value() ) { k_dist.push_back( *cd ); }
+	}
+	if ( k_dist.size() < 3 ) {
+		return k_dist.empty() ? epsilon_estimation( points, min_pts ) : k_dist.back();
+	}
+
+	std::sort( k_dist.begin(), k_dist.end() );  // ascending
+	// Knee = index maximizing perpendicular distance to the chord (0, k_dist.front()) ->
+	// (m-1, k_dist.back()). |dy*(i) - dx*(k_dist[i]-y0)| / |chord| is maximal at the bend.
+	const std::size_t m = k_dist.size();
+	const double y0 = k_dist.front();
+	const double dx = static_cast<double>( m - 1 );
+	const double dy = k_dist.back() - y0;
+	const double norm = std::sqrt( dx * dx + dy * dy );
+	if ( norm <= 0.0 ) { return k_dist.back(); }  // flat curve: every k-distance equal
+	double best_metric = -1.0;
+	std::size_t best_i = m - 1;
+	for ( std::size_t i = 0; i < m; ++i ) {
+		const double d = std::abs( dy * static_cast<double>( i ) - dx * ( k_dist[i] - y0 ) ) / norm;
+		if ( d > best_metric ) { best_metric = d; best_i = i; }
+	}
+	return k_dist[best_i];
+}
+
+
 //=== The OPTICS ordering ====================================================
 
 // Computes the OPTICS cluster-ordering and reachability distances.
@@ -207,7 +262,12 @@ std::vector<reachability_dist> compute_reachability_dists(
 	// inputs no longer collapse to a zero radius).
 	const T eps_t = static_cast<T>( eps );
 
+	// Optional phase profiler: a no-op unless built with -DOPTICS_PROFILE (see
+	// detail/profile.hpp). The hooks below carry no #ifdef of their own.
+	detail::PhaseProfiler _prof;
+	const auto _t_build = _prof.now();
 	const Backend backend( points );
+	_prof.add( _prof.index_build, _t_build );
 	const std::size_t n = points.size();
 
 	std::vector<char> processed( n, 0 );
@@ -216,6 +276,7 @@ std::vector<reachability_dist> compute_reachability_dists(
 	std::vector<double> reachability( n, -1.0 );
 
 	// Neighbor acquisition: precompute-all (parallel) or on-demand.
+	const auto _t_pre = _prof.now();
 	std::vector<std::vector<std::size_t>> neighbors;
 	if ( mode == NeighborMode::Precompute ) {
 		// Optional guard: estimate the neighbor-cache size from a small sample before
@@ -248,6 +309,7 @@ std::vector<reachability_dist> compute_reachability_dists(
 			backend.radius_search( points[i], eps_t, neighbors[i] );
 		} );
 	}
+	_prof.add( _prof.precompute, _t_pre );
 	std::vector<std::size_t> ondemand_buf;
 	const auto neighbors_of = [&]( std::size_t idx ) -> const std::vector<std::size_t>& {
 		if ( mode == NeighborMode::Precompute ) { return neighbors[idx]; }
@@ -261,6 +323,7 @@ std::vector<reachability_dist> compute_reachability_dists(
 	// branch out of instantiations for backends without the capability, which then
 	// always Scan.
 	const auto core_dist_of = [&]( std::size_t idx, const std::vector<std::size_t>& nbrs ) -> std::optional<double> {
+		[[maybe_unused]] auto _s = _prof.scope( _prof.core_dist );
 		(void)core_dist_mode;  // unused when the backend lacks a knn_core_dist capability
 		if constexpr ( KnnCoreDist<Backend, T, Dim> ) {
 			if ( core_dist_mode == CoreDistMode::Knn ) {
@@ -273,6 +336,7 @@ std::vector<reachability_dist> compute_reachability_dists(
 	// Reused across points; drained to empty whenever an expansion finishes.
 	detail::seed_queue seeds;
 	const auto relax_neighbors = [&]( std::size_t idx, const std::vector<std::size_t>& nbrs, double core_dist ) {
+		[[maybe_unused]] auto _s = _prof.scope( _prof.relax );
 		for ( const std::size_t o : nbrs ) {
 			if ( processed[o] ) { continue; }
 			const double new_rd = std::max( core_dist, detail::dist( points[idx], points[o] ) );
@@ -283,6 +347,7 @@ std::vector<reachability_dist> compute_reachability_dists(
 		}
 	};
 
+	const auto _t_loop = _prof.now();
 	for ( std::size_t point_idx = 0; point_idx < n; point_idx++ ) {
 		if ( processed[point_idx] ) { continue; }
 		processed[point_idx] = 1;
@@ -306,6 +371,8 @@ std::vector<reachability_dist> compute_reachability_dists(
 		}
 	}
 	assert( ordered_list.size() == n );
+	_prof.add( _prof.loop, _t_loop );
+	_prof.report( n );
 
 	std::vector<reachability_dist> result;
 	result.reserve( n );
