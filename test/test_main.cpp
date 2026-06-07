@@ -1037,6 +1037,58 @@ TEST_CASE("memory invariant: Precompute cache grows with n; OnDemand holds one n
 }
 
 
+TEST_CASE("ceos_neighbors: exact precision, good recall, symmetric, self-matching") {
+	// Four well-separated blobs, L2-normalized onto the unit sphere (cosine metric).
+	auto pts = optics::testdata::make_blobs<double, 3>( 4, 120, 30.0, 1.0, 123u );
+	for ( auto& p : pts ) {
+		const double nrm = std::sqrt( p[0] * p[0] + p[1] * p[1] + p[2] * p[2] );
+		if ( nrm > 0.0 ) { for ( auto& c : p ) { c /= nrm; } }
+	}
+	const std::size_t n = pts.size();
+	const double eps = 0.25;  // Euclidean radius on the unit sphere (monotone in cosine distance)
+	const std::size_t min_pts = 5;
+
+	optics::detail::CeosParams params;
+	params.n_projections = 512;
+	params.k = 20;
+	params.m = 40;
+	params.seed = 7;
+	const auto approx = optics::detail::ceos_neighbors( pts, eps, min_pts, params );
+	REQUIRE( approx.size() == n );
+
+	// Brute-force true eps-neighborhoods (incl. self) for precision/recall.
+	const double eps_sq = eps * eps;
+	std::vector<std::set<std::size_t>> truth( n );
+	for ( std::size_t i = 0; i < n; ++i ) {
+		for ( std::size_t j = 0; j < n; ++j ) {
+			if ( optics::detail::square_dist( pts[i], pts[j] ) <= eps_sq ) { truth[i].insert( j ); }
+		}
+	}
+
+	std::size_t total_true = 0, found_true = 0, returned = 0, returned_in_truth = 0;
+	for ( std::size_t i = 0; i < n; ++i ) {
+		CHECK( std::find( approx[i].begin(), approx[i].end(), i ) != approx[i].end() );  // self-match
+		const std::set<std::size_t> a( approx[i].begin(), approx[i].end() );
+		CHECK( a.size() == approx[i].size() );  // no duplicates
+		for ( const std::size_t x : a ) { returned++; if ( truth[i].count( x ) ) { returned_in_truth++; } }
+		for ( const std::size_t t : truth[i] ) { total_true++; if ( a.count( t ) ) { found_true++; } }
+	}
+
+	// Precision is exact by construction: every returned candidate is within eps.
+	CHECK( returned == returned_in_truth );
+	// Recall: CEOs recovers the large majority of true neighbors on well-separated data.
+	const double recall = static_cast<double>( found_true ) / static_cast<double>( total_true );
+	CHECK( recall > 0.7 );
+
+	// Symmetry: x in N(q)  <=>  q in N(x).
+	for ( std::size_t q = 0; q < n; ++q ) {
+		for ( const std::size_t x : approx[q] ) {
+			CHECK( std::find( approx[x].begin(), approx[x].end(), q ) != approx[x].end() );
+		}
+	}
+}
+
+
 TEST_CASE("backend matrix: clustering is consistent across neighbor-search backends") {
 	static const std::size_t N = 2;
 	const std::vector<std::array<double, N>> centers = { { 0, 0 }, { 60, 0 }, { 30, 50 } };

@@ -11,6 +11,7 @@
 #include "detail/math.hpp"
 #include "detail/thread_pool.hpp"
 #include "detail/profile.hpp"
+#include "detail/random_projection.hpp"
 
 #include <algorithm>
 #include <array>
