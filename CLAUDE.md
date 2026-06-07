@@ -10,6 +10,8 @@ The library has **no mandatory external dependencies**: only the vendored `nanof
 
 For project history and direction: `CHANGELOG.md` (release notes, current version 0.9.1) and `docs/ROADMAP-*.md` (planned work — e.g. the `chi_tree_to_points` helper is queued in `docs/ROADMAP-post-0.9.1.md`). `THIRD-PARTY-LICENSES.md` covers vendored-dep licensing; `CITATION.cff` is the citation metadata.
 
+For algorithm research and future direction: `documentation/` holds papers + `references.md` for the planned **sOPTICS** (sDBSCAN/sOPTICS, random-projection OPTICS — GitHub issue #50). The 1.0.0 milestone tracks the bigger algorithm/benchmark work: sOPTICS (#50), HDBSCAN\* (#52), CPU-speed comparisons vs ELKI/dbscan/sDbscan (#53), an ARI/NMI/Rand quality harness (#54), and non-Euclidean metrics (#51). Original OPTICS/FOPTICS papers live in `background/`.
+
 ## Build & test
 
 Requires a C++20 compiler (MSVC 2022, GCC 10+, or Clang 13+) and CMake ≥ 3.21. Use the presets:
@@ -31,6 +33,7 @@ ctest --test-dir build -C Release --output-on-failure
 - **Unit suite uses [doctest](https://github.com/doctest/doctest)** (`test/third_party/doctest.h`, vendored, test-only): `optics_tests` is `TEST_CASE`/`CHECK`-based, so assertions run regardless of `NDEBUG`. Note: doctest can't decompose `&&`/`||` in a `CHECK` — wrap such expressions in parens. The separate `optics_visual_test` still verifies via `assert()`, so it keeps `/UNDEBUG` (MSVC) / `-UNDEBUG` (GCC/Clang).
 - **Optional Boost backend:** configure with `-DOPTICS_ENABLE_BOOST_RTREE=ON` (needs Boost.Geometry). This compiles `BoostRTreeBackend` and an `#ifdef`-gated equivalence test. Boost is exercised in CI (`.github/workflows/ci.yml`), not in the default build.
 - **Benchmarks (Release, none are ctests):** `optics_benchmark` — general benchmark; optional integer arg scales the point counts (`optics_benchmark 4`). `optics_perf` — nanobench perf-regression harness, emits `optics_perf.csv`. `optics_scale` — large-scale (1e6–1e7) 3-D timing harness.
+- **Phase profiler:** build any consumer with `-DOPTICS_PROFILE` (MSVC `/DOPTICS_PROFILE`) to print a per-phase timing breakdown (index build / precompute / core_dist / relax / loop) to stderr after each `compute_reachability_dists` call. Off by default ⇒ zero overhead and no call-site `#ifdef` (the conditional compilation lives in `include/optics/detail/profile.hpp`).
 - **Examples:** built when `OPTICS_BUILD_EXAMPLES` is ON (default for a top-level build). `optics_color` (`examples/color_clustering/`) clusters a 3-D RGB color space; `cluster_csv` (`examples/cluster_csv/`) is a generic CSV cloud clusterer (2/3/4/16-D). Each dir has its own `README.md` and companion Python scripts. Toggle build scope with `OPTICS_BUILD_TESTS` / `OPTICS_BUILD_EXAMPLES`; `OPTICS_BUILD_PYTHON` (OFF) builds the optional pybind11 NumPy binding under `python/` (see `python/README.md`); `OPTICS_INSTALL` adds install + `find_package(optics)` / FetchContent config.
 - **Local toolchain note:** on the original dev machine only VS2022 is installed (no g++/standalone cmake on PATH); use its bundled cmake at `…\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe`.
 
