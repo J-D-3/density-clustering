@@ -81,9 +81,10 @@ probes availability and skips the column cleanly otherwise.
 
 ## TODOs
 
-- **Consider the knee estimator as the auto-eps default for `extract_xi` / `cluster_threshold`** —
-  it is clearly better on clustered data (#57). A semver/behavior decision (currently opt-in: pass
-  `optics::epsilon_estimation_knee(...)` as `epsilon`).
+- ~~Consider the knee estimator as the auto-eps default~~ **DONE** (#49/#57): auto-epsilon now
+  defaults to `epsilon_estimation_knee` across `compute_reachability_dists` / `cluster_threshold` /
+  `extract_xi` (falls back to uniform for non-`KnnCoreDist` backends and degenerate inputs). Pass an
+  explicit `epsilon` for the uniform behavior.
 - **sOPTICS 16-D quality dip** — cos-blobs-16d ARI 0.57 vs ~0.82 for the exact methods; check
   CEOs params (D / k / m) and curse-of-dimensionality.
 - **Reproduce the dbscan JSS benchmark** (replication script) to validate our setup against

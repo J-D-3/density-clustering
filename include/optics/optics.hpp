@@ -271,7 +271,7 @@ double epsilon_estimation_knee( const std::vector<std::array<T, Dim>>& points, s
 		if ( cd.has_value() ) { k_dist.push_back( *cd ); }
 	}
 	if ( k_dist.size() < 3 ) {
-		return k_dist.empty() ? epsilon_estimation( points, min_pts ) : k_dist.back();
+		return ( k_dist.empty() || k_dist.back() <= 0.0 ) ? epsilon_estimation( points, min_pts ) : k_dist.back();
 	}
 
 	std::sort( k_dist.begin(), k_dist.end() );  // ascending
@@ -282,14 +282,18 @@ double epsilon_estimation_knee( const std::vector<std::array<T, Dim>>& points, s
 	const double dx = static_cast<double>( m - 1 );
 	const double dy = k_dist.back() - y0;
 	const double norm = std::sqrt( dx * dx + dy * dy );
-	if ( norm <= 0.0 ) { return k_dist.back(); }  // flat curve: every k-distance equal
+	// Flat curve (every k-distance equal). If that value is positive it is the scale; if it
+	// is 0 (e.g. all-identical points) defer to the uniform estimate so auto-eps never collapses.
+	if ( norm <= 0.0 ) { return k_dist.back() > 0.0 ? k_dist.back() : epsilon_estimation( points, min_pts ); }
 	double best_metric = -1.0;
 	std::size_t best_i = m - 1;
 	for ( std::size_t i = 0; i < m; ++i ) {
 		const double d = std::abs( dy * static_cast<double>( i ) - dx * ( k_dist[i] - y0 ) ) / norm;
 		if ( d > best_metric ) { best_metric = d; best_i = i; }
 	}
-	return k_dist[best_i];
+	// A positive knee is the within-cluster scale; a non-positive one (degenerate input)
+	// defers to the uniform estimate so auto-eps never collapses to a zero radius.
+	return k_dist[best_i] > 0.0 ? k_dist[best_i] : epsilon_estimation( points, min_pts );
 }
 
 
@@ -329,10 +333,20 @@ std::vector<reachability_dist> compute_reachability_dists(
 	if ( points.empty() ) { return {}; }
 
 	double eps = epsilon;
-	if ( eps <= 0.0 ) { eps = epsilon_estimation( points, min_pts ); }
-	// epsilon_estimation returns a positive scale for any input with >= 2 points,
-	// using only the non-degenerate dimensions (so collinear/planar/identical
-	// inputs no longer collapse to a zero radius).
+	if ( eps <= 0.0 ) {
+		// Auto-epsilon. Default to the k-distance-knee estimator, which tracks the actual
+		// within-cluster scale -- the uniform-density epsilon_estimation over-estimates on
+		// clustered data, which both slows the dense path AND smooths the reachability so Xi
+		// under-segments (issue #57). The knee needs a KnnCoreDist backend; for backends that
+		// lack it (e.g. Boost) fall back to the uniform estimate (if constexpr => zero overhead,
+		// and no knn_core_dist instantiation for backends without it). Both yield a positive
+		// scale for any >= 2-point input (degenerate inputs included), so no zero-radius collapse.
+		if constexpr ( KnnCoreDist<Backend, T, Dim> ) {
+			eps = epsilon_estimation_knee<T, Dim, Backend>( points, min_pts );
+		} else {
+			eps = epsilon_estimation( points, min_pts );
+		}
+	}
 	const T eps_t = static_cast<T>( eps );
 
 	// Optional phase profiler: a no-op unless built with -DOPTICS_PROFILE (see

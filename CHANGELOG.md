@@ -39,6 +39,15 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
   recovers it (R15 ARI 0.95). `tools/quality_benchmark.py` now defaults to `--eps knee`. See
   `docs/benchmarking.md`.
 
+### Changed
+- **Auto-epsilon now defaults to the k-distance-knee estimator** (`epsilon_estimation_knee`) instead of
+  the uniform-density `epsilon_estimation`, across `compute_reachability_dists` and the `cluster_threshold`
+  / `extract_xi` wrappers. The uniform estimate over-shoots on clustered data, which slows the dense path
+  and over-smooths the reachability so Xi under-segments (Franti R15: ARI 0.43 → 0.95). It falls back to
+  the uniform estimate for backends without `KnnCoreDist` and on degenerate (zero-variance) inputs. Pass
+  an explicit `epsilon` for the old behavior. A deliberate pre-1.0 behavior change toward the API freeze
+  (#49, #57).
+
 ## [0.9.2] — 2026-06-07
 
 Focus: usability and hardening on the road to 1.0 — smarter parameters, safer memory, and broader

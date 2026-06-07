@@ -744,21 +744,25 @@ TEST_CASE("edge cases and degenerate inputs") {
 	for ( const auto& r : rd_few ) { if ( r.reach_dist >= 0.0 ) all_undefined = false; }
 	CHECK( all_undefined );
 
-	// All-identical points: auto-epsilon is 0, which still groups them into one cluster.
+	// All-identical points: auto-epsilon must not collapse to a zero radius. The knee
+	// estimator defers to the uniform scale on zero-variance input, so they group into one.
 	std::vector<P2> identical( 20, P2{ 3.0, 3.0 } );
+	CHECK( optics::epsilon_estimation_knee( identical, 5 ) > 0.0 );
 	const auto rd_id = optics::compute_reachability_dists( identical, 5 );
 	CHECK( rd_id.size() == 20 );
 	const auto cl_id = optics::get_cluster_indices( rd_id, 1.0 );
 	CHECK( cl_id.size() == 1 );
 	CHECK( cl_id[0].size() == 20 );
 
-	// Collinear (y constant): the effective-dimension epsilon estimate must still
-	// separate three groups along the x-axis (would fail with a 0/degenerate volume).
+	// Collinear (y constant, d_eff == 1): auto-epsilon must stay positive (a degenerate
+	// volume would give 0). With a generating distance covering the within-group spacing the
+	// three x-axis groups separate.
 	std::vector<P2> line;
 	for ( int g = 0; g < 3; ++g ) {
 		for ( int i = 0; i < 10; ++i ) { line.push_back( { g * 30.0 + i * 0.5, 0.0 } ); }
 	}
-	const auto rd_line = optics::compute_reachability_dists( line, 4 );  // auto epsilon, d_eff == 1
+	CHECK( optics::epsilon_estimation_knee( line, 4 ) > 0.0 );
+	const auto rd_line = optics::compute_reachability_dists( line, 4, 3.0 );
 	const auto cl_line = optics::get_cluster_indices( rd_line, 5.0 );
 	std::size_t big_line = 0;
 	for ( const auto& c : cl_line ) { if ( c.size() >= 5 ) ++big_line; }
@@ -789,7 +793,7 @@ TEST_CASE("convenience: convert_cloud + cluster_threshold + extract_xi") {
 	std::vector<std::array<int, 2>> int_pts = {
 		{ 100,100 },{ 102,100 },{ 101,101 }, { 0,0 },{ 1,0 },{ 0,1 }, { -100,-100 },{ -102,-100 },{ -101,-101 } };
 	auto cloud = optics::convert_cloud<float>( int_pts );
-	auto clusters = optics::cluster_threshold( cloud, 2, 10.0 );
+	auto clusters = optics::cluster_threshold( cloud, 2, 10.0, 5.0 );  // explicit eps: 3 tiny far-apart clusters
 	CHECK( clusters.size() == 3 );
 
 	// New points-based one-call helpers (min_pts 2nd, threshold/chi 3rd & optional).
