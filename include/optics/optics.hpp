@@ -578,22 +578,59 @@ std::vector<std::array<Out, Dim>> convert_cloud( const std::vector<std::array<In
 	return out;
 }
 
-// One-call DBSCAN-style clustering: compute the ordering and cut at a threshold.
-// Returns one index list per cluster (noise points become singletons).
+namespace detail {
+// Heuristic flat-cut threshold used when the caller doesn't supply one: a high
+// percentile of the finite reachability distances, so only the tallest peaks separate
+// clusters. There is no universally-correct flat threshold (that is what the Xi method
+// is for) -- look at the reachability plot to tune. Returns 0 if nothing was reached.
+inline double default_threshold( const std::vector<reachability_dist>& reach, double percentile = 0.90 ) {
+	std::vector<double> finite;
+	finite.reserve( reach.size() );
+	for ( const auto& r : reach ) { if ( r.reach_dist >= 0.0 ) { finite.push_back( r.reach_dist ); } }
+	if ( finite.empty() ) { return 0.0; }
+	const std::size_t k = std::min( finite.size() - 1,
+		static_cast<std::size_t>( percentile * static_cast<double>( finite.size() ) ) );
+	std::nth_element( finite.begin(), finite.begin() + static_cast<std::ptrdiff_t>( k ), finite.end() );
+	return finite[k];
+}
+}  // namespace detail
+
+// One-call flat extraction: compute the OPTICS ordering and cut the reachability plot at
+// `threshold`. This is the paper's ExtractDBSCAN -- it yields the *same* clustering DBSCAN
+// would at eps = threshold; we do NOT run DBSCAN. Returns one point-index list per cluster
+// (unreached/UNDEFINED points become singletons). When `threshold < 0` (the default) an
+// educated default is used: a high percentile of the reachabilities (see
+// detail::default_threshold) -- no flat threshold is universally right, so inspect the plot.
 template <class T, std::size_t Dim, class Backend = NanoflannBackend<T, Dim>>
-std::vector<std::vector<std::size_t>> cluster_dbscan(
-	const std::vector<std::array<T, Dim>>& points, std::size_t min_pts, double threshold,
+std::vector<std::vector<std::size_t>> cluster_threshold(
+	const std::vector<std::array<T, Dim>>& points, std::size_t min_pts, double threshold = -1.0,
 	double epsilon = -1.0, NeighborMode mode = NeighborMode::OnDemand, unsigned n_threads = 0 ) {
 	const auto reach = compute_reachability_dists<T, Dim, Backend>( points, min_pts, epsilon, mode, n_threads );
-	return get_cluster_indices( reach, threshold );
+	const double t = ( threshold < 0.0 ) ? detail::default_threshold( reach ) : threshold;
+	return get_cluster_indices( reach, t );
 }
 
-// Xi (steep-area) clusters as point-index lists, in one call from a cluster-ordering.
-inline std::vector<std::vector<std::size_t>> extract_xi(
-	const std::vector<reachability_dist>& reach_dists, double chi, std::size_t min_pts,
+// Deprecated alias for cluster_threshold: the flat cut is the paper's ExtractDBSCAN, not a
+// DBSCAN run. Kept for one version for source compatibility.
+template <class T, std::size_t Dim, class Backend = NanoflannBackend<T, Dim>>
+[[deprecated( "renamed to cluster_threshold (this is OPTICS + a flat cut, not DBSCAN)" )]]
+std::vector<std::vector<std::size_t>> cluster_dbscan(
+	const std::vector<std::array<T, Dim>>& points, std::size_t min_pts, double threshold = -1.0,
+	double epsilon = -1.0, NeighborMode mode = NeighborMode::OnDemand, unsigned n_threads = 0 ) {
+	return cluster_threshold<T, Dim, Backend>( points, min_pts, threshold, epsilon, mode, n_threads );
+}
+
+// One-call hierarchical Xi (steep-area) extraction, FLATTENED to a list of clusters:
+// compute the ordering and run the Xi method. The nesting is discarded here -- use
+// get_chi_clusters(reach, chi, min_pts) for the cluster tree. `chi` defaults to 0.05.
+template <class T, std::size_t Dim, class Backend = NanoflannBackend<T, Dim>>
+std::vector<std::vector<std::size_t>> extract_xi(
+	const std::vector<std::array<T, Dim>>& points, std::size_t min_pts, double chi = 0.05,
+	double epsilon = -1.0, NeighborMode mode = NeighborMode::OnDemand, unsigned n_threads = 0,
 	double steep_area_min_diff = 0.0 ) {
-	const auto flat = get_chi_clusters_flat( reach_dists, chi, min_pts, steep_area_min_diff );
-	return get_cluster_indices( reach_dists, flat );
+	const auto reach = compute_reachability_dists<T, Dim, Backend>( points, min_pts, epsilon, mode, n_threads );
+	const auto flat = get_chi_clusters_flat( reach, chi, min_pts, steep_area_min_diff );
+	return get_cluster_indices( reach, flat );
 }
 
 }  // namespace optics

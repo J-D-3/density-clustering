@@ -771,8 +771,8 @@ TEST_CASE("edge cases and degenerate inputs") {
 		for ( const auto& c : cs ) { if ( c.size() >= 20 ) ++k; }
 		return k;
 	};
-	const auto big_d = large( optics::cluster_dbscan( pd, 5, 12.0 ) );
-	const auto big_f = large( optics::cluster_dbscan( pf, 5, 12.0 ) );
+	const auto big_d = large( optics::cluster_threshold( pd, 5, 12.0 ) );
+	const auto big_f = large( optics::cluster_threshold( pf, 5, 12.0 ) );
 	CHECK( big_d == 3 );
 	CHECK( big_d == big_f );
 
@@ -782,19 +782,28 @@ TEST_CASE("edge cases and degenerate inputs") {
 	CHECK( r1 == r2 );
 }
 
-TEST_CASE("convenience: convert_cloud + cluster_dbscan + extract_xi") {
-	// Integer cloud (e.g. color-ish data) -> float, then a one-call DBSCAN cut.
+TEST_CASE("convenience: convert_cloud + cluster_threshold + extract_xi") {
+	// Integer cloud (e.g. color-ish data) -> float, then a one-call flat cut.
 	std::vector<std::array<int, 2>> int_pts = {
 		{ 100,100 },{ 102,100 },{ 101,101 }, { 0,0 },{ 1,0 },{ 0,1 }, { -100,-100 },{ -102,-100 },{ -101,-101 } };
 	auto cloud = optics::convert_cloud<float>( int_pts );
-	auto clusters = optics::cluster_dbscan( cloud, 2, 10.0 );
+	auto clusters = optics::cluster_threshold( cloud, 2, 10.0 );
 	CHECK( clusters.size() == 3 );
 
-	// Xi clusters as point-index lists from a cluster-ordering.
+	// New points-based one-call helpers (min_pts 2nd, threshold/chi 3rd & optional).
+	auto xi_pts = optics::extract_xi( cloud, 2, 0.05 );
+	CHECK( !xi_pts.empty() );
+	// Auto threshold (not supplied) still produces a valid partition of all points.
+	auto auto_cut = optics::cluster_threshold( cloud, 2 );
+	std::size_t covered = 0;
+	for ( const auto& c : auto_cut ) { covered += c.size(); }
+	CHECK( covered == cloud.size() );
+
+	// Low-level Xi from a hand-crafted cluster-ordering (what extract_xi runs internally).
 	std::vector<optics::reachability_dist> reach_dists = {
 		{ 1,10.0 },{ 2,9.0 },{ 3,9.0 },{ 4,5.0 },{ 5,5.49 },{ 6,5.0 },
 		{ 7,6.5 },{ 8,3.0 },{ 9,2.9 },{ 10,2.8 },{ 11,10.0 },{ 12,12.0 } };
-	auto xi = optics::extract_xi( reach_dists, 0.1, 4 );
+	auto xi = optics::get_cluster_indices( reach_dists, optics::get_chi_clusters_flat( reach_dists, 0.1, 4 ) );
 	CHECK( xi.size() == 3 );
 }
 

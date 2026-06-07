@@ -47,21 +47,22 @@ std::size_t check_dim( const Array& arr ) {
     return static_cast<std::size_t>( arr.shape( 1 ) );
 }
 
-// --- cluster_dbscan: flat threshold cut -> per-point labels (-1 = noise) ------
+// --- cluster_threshold: flat reachability-cut -> per-point labels (-1 = noise) -
+// (the paper's ExtractDBSCAN; we do not run DBSCAN). threshold < 0 => educated default.
 template <std::size_t Dim>
-py::array_t<long long> dbscan_impl( const Array& arr, std::size_t min_pts, double threshold, double min_cluster_frac ) {
+py::array_t<long long> threshold_impl( const Array& arr, std::size_t min_pts, double threshold, double min_cluster_frac ) {
     const auto pts = to_points<Dim>( arr );
-    const auto clusters = optics::cluster_dbscan( pts, min_pts, threshold );
+    const auto clusters = optics::cluster_threshold( pts, min_pts, threshold );
     const std::size_t min_size = std::max<std::size_t>( 1, static_cast<std::size_t>( min_cluster_frac * static_cast<double>( pts.size() ) ) );
     return to_label_array( optics::io::cluster_labels( pts.size(), clusters, min_size ) );
 }
 
-py::array_t<long long> cluster_dbscan_py( const Array& arr, std::size_t min_pts, double threshold, double min_cluster_frac ) {
+py::array_t<long long> cluster_threshold_py( const Array& arr, std::size_t min_pts, double threshold, double min_cluster_frac ) {
     switch ( check_dim( arr ) ) {
-        case 1: return dbscan_impl<1>( arr, min_pts, threshold, min_cluster_frac );
-        case 2: return dbscan_impl<2>( arr, min_pts, threshold, min_cluster_frac );
-        case 3: return dbscan_impl<3>( arr, min_pts, threshold, min_cluster_frac );
-        case 4: return dbscan_impl<4>( arr, min_pts, threshold, min_cluster_frac );
+        case 1: return threshold_impl<1>( arr, min_pts, threshold, min_cluster_frac );
+        case 2: return threshold_impl<2>( arr, min_pts, threshold, min_cluster_frac );
+        case 3: return threshold_impl<3>( arr, min_pts, threshold, min_cluster_frac );
+        case 4: return threshold_impl<4>( arr, min_pts, threshold, min_cluster_frac );
         default: throw std::invalid_argument( "only 1..4 dimensions are supported" );
     }
 }
@@ -70,8 +71,7 @@ py::array_t<long long> cluster_dbscan_py( const Array& arr, std::size_t min_pts,
 template <std::size_t Dim>
 py::array_t<long long> xi_impl( const Array& arr, std::size_t min_pts, double chi ) {
     const auto pts = to_points<Dim>( arr );
-    const auto reach = optics::compute_reachability_dists( pts, min_pts );
-    const auto clusters = optics::extract_xi( reach, chi, min_pts );
+    const auto clusters = optics::extract_xi( pts, min_pts, chi );
     return to_label_array( optics::io::cluster_labels( pts.size(), clusters, 1 ) );
 }
 
@@ -119,13 +119,21 @@ py::dict compute_reachability_py( const Array& arr, std::size_t min_pts, double 
 PYBIND11_MODULE( optics_py, m ) {
     m.doc() = "OPTICS density-based clustering for 1/2/3/4-D NumPy point clouds.";
 
-    m.def( "cluster_dbscan", &cluster_dbscan_py,
-           py::arg( "points" ), py::arg( "min_pts" ), py::arg( "threshold" ), py::arg( "min_cluster_frac" ) = 0.0,
-           "Flat reachability-threshold cut. Returns per-point int labels (-1 = noise)." );
+    m.def( "cluster_threshold", &cluster_threshold_py,
+           py::arg( "points" ), py::arg( "min_pts" ), py::arg( "threshold" ) = -1.0, py::arg( "min_cluster_frac" ) = 0.0,
+           "Flat reachability-threshold cut (the OPTICS paper's ExtractDBSCAN -- the same clustering "
+           "DBSCAN would give at eps = threshold; not a DBSCAN run). threshold < 0 picks an educated "
+           "default (a high percentile of the reachabilities). Returns per-point int labels (-1 = noise)." );
+
+    // Deprecated alias for the old name.
+    m.def( "cluster_dbscan", &cluster_threshold_py,
+           py::arg( "points" ), py::arg( "min_pts" ), py::arg( "threshold" ) = -1.0, py::arg( "min_cluster_frac" ) = 0.0,
+           "Deprecated alias for cluster_threshold." );
 
     m.def( "extract_xi", &extract_xi_py,
            py::arg( "points" ), py::arg( "min_pts" ), py::arg( "chi" ) = 0.05,
-           "Hierarchical (xi steep-area) extraction. Returns per-point int labels (-1 = noise)." );
+           "Hierarchical (xi steep-area) extraction, flattened to clusters (use the C++ get_chi_clusters "
+           "for the tree). Returns per-point int labels (-1 = noise)." );
 
     m.def( "compute_reachability", &compute_reachability_py,
            py::arg( "points" ), py::arg( "min_pts" ), py::arg( "epsilon" ) = -1.0,

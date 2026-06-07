@@ -69,7 +69,7 @@ int run( const std::vector<double>& flat, std::size_t n, const std::string& out_
 	const auto reach = optics::compute_reachability_dists( points, min_pts, eps, mode, n_threads );
 	const auto t1 = clk::now();
 	const auto clusters = ( xi_chi > 0.0 )
-		? optics::extract_xi( reach, xi_chi, min_pts )
+		? optics::get_cluster_indices( reach, optics::get_chi_clusters_flat( reach, xi_chi, min_pts ) )
 		: optics::get_cluster_indices( reach, threshold );
 	const std::size_t min_size = static_cast<std::size_t>( min_cluster_frac * static_cast<double>( n ) );
 	const auto labels = optics::io::cluster_labels( n, clusters, min_size );
