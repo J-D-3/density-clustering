@@ -1089,6 +1089,89 @@ TEST_CASE("ceos_neighbors: exact precision, good recall, symmetric, self-matchin
 }
 
 
+// Rand index between two flat labelings: the fraction of point-pairs that agree on
+// same/different cluster. 1.0 == identical partition.
+static double rand_index( const std::vector<long long>& a, const std::vector<long long>& b ) {
+	const std::size_t n = a.size();
+	std::size_t agree = 0, total = 0;
+	for ( std::size_t i = 0; i < n; ++i ) {
+		for ( std::size_t j = i + 1; j < n; ++j ) {
+			if ( ( a[i] == a[j] ) == ( b[i] == b[j] ) ) { ++agree; }
+			++total;
+		}
+	}
+	return total ? static_cast<double>( agree ) / static_cast<double>( total ) : 1.0;
+}
+
+// Per-point labels from a cluster list (each cluster -- including singletons -- a distinct id).
+static std::vector<long long> labels_from_clusters( std::size_t n, const std::vector<std::vector<std::size_t>>& clusters ) {
+	std::vector<long long> labels( n, -1 );
+	long long id = 0;
+	for ( const auto& c : clusters ) {
+		for ( const std::size_t idx : c ) { labels[idx] = id; }
+		++id;
+	}
+	return labels;
+}
+
+TEST_CASE("sOPTICS: high Rand-index agreement with exact OPTICS; seed-deterministic") {
+	// Normalize so both algorithms share the SAME metric: exact OPTICS on the unit
+	// sphere is monotone-equivalent to cosine OPTICS, which sOPTICS approximates.
+	auto pts = optics::testdata::make_blobs<double, 3>( 5, 120, 30.0, 1.0, 321u );
+	for ( auto& p : pts ) {
+		const double nrm = std::sqrt( p[0] * p[0] + p[1] * p[1] + p[2] * p[2] );
+		if ( nrm > 0.0 ) { for ( auto& c : p ) { c /= nrm; } }
+	}
+	const std::size_t n = pts.size();
+	const std::size_t min_pts = 6;
+	const double eps = 0.3;
+
+	const auto exact = optics::compute_reachability_dists( pts, min_pts, eps );
+	const auto approx = optics::compute_soptics_reachability_dists( pts, min_pts, eps, 512u, 20u, std::size_t{ 40 }, 7u );
+
+	// The approximate ordering still satisfies the generic OPTICS-output invariants (B4).
+	check_ordering_invariants( exact, n );
+	check_ordering_invariants( approx, n );
+
+	// Flat-cut both plots at the same threshold; the partitions should largely agree.
+	const double thr = 0.5 * eps;
+	const auto la = labels_from_clusters( n, optics::get_cluster_indices( exact, thr ) );
+	const auto lb = labels_from_clusters( n, optics::get_cluster_indices( approx, thr ) );
+	CHECK( rand_index( la, lb ) > 0.9 );  // typically ~0.99 on well-separated data
+
+	// Determinism: same seed => byte-identical ordering.
+	const auto approx_same = optics::compute_soptics_reachability_dists( pts, min_pts, eps, 512u, 20u, std::size_t{ 40 }, 7u );
+	CHECK( ( approx == approx_same ) );
+
+	// A different seed still agrees closely with exact OPTICS (stability).
+	const auto approx_other = optics::compute_soptics_reachability_dists( pts, min_pts, eps, 512u, 20u, std::size_t{ 40 }, 99u );
+	const auto ld = labels_from_clusters( n, optics::get_cluster_indices( approx_other, thr ) );
+	CHECK( rand_index( la, ld ) > 0.9 );
+}
+
+TEST_CASE("sOPTICS: edge cases (empty, < min_pts, identical points, high-D)") {
+	// Empty cloud -> well-formed empty ordering.
+	const std::vector<std::array<double, 3>> empty;
+	CHECK( optics::compute_soptics_reachability_dists( empty, 4 ).empty() );
+
+	// Fewer points than min_pts: a valid permutation, every reach UNDEFINED.
+	std::vector<std::array<double, 3>> few = { { 1, 0, 0 }, { 0, 1, 0 } };
+	const auto r_few = optics::compute_soptics_reachability_dists( few, 5, -1.0, 64u );
+	CHECK( r_few.size() == few.size() );
+	for ( const auto& rd : r_few ) { CHECK( rd.reach_dist < 0.0 ); }
+
+	// Identical points (degenerate projections) must not crash and stay a permutation.
+	const std::vector<std::array<double, 3>> same( 30, { 1.0, 2.0, 3.0 } );
+	const auto r_same = optics::compute_soptics_reachability_dists( same, 4, -1.0, 64u );
+	CHECK( r_same.size() == same.size() );
+
+	// High-D smoke test.
+	const auto hd = optics::testdata::make_blobs<double, 16>( 3, 40, 20.0, 1.0, 5u );
+	const auto r_hd = optics::compute_soptics_reachability_dists( hd, 5, -1.0, 256u );
+	CHECK( r_hd.size() == hd.size() );
+}
+
+
 TEST_CASE("backend matrix: clustering is consistent across neighbor-search backends") {
 	static const std::size_t N = 2;
 	const std::vector<std::array<double, N>> centers = { { 0, 0 }, { 60, 0 }, { 30, 50 } };

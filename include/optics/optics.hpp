@@ -411,6 +411,83 @@ std::vector<reachability_dist> compute_reachability_dists(
 }
 
 
+//=== sOPTICS: scalable approximate OPTICS via random projections ============
+
+// sOPTICS (Xu & Pham, NeurIPS 2024): a scalable, approximate OPTICS that replaces the
+// exact radius search with CEOs random-projection neighborhoods (see
+// detail/random_projection.hpp). It returns the same reachability_dist cluster-ordering
+// as compute_reachability_dists, so all existing extraction (get_cluster_indices,
+// get_chi_clusters, cluster_threshold, ...) applies unchanged.
+//
+// Metric is COSINE: points are L2-normalized onto the unit sphere internally, where
+// Euclidean distance is monotone in cosine distance, so the ordering / reachability-plot
+// valleys match the cosine ones. Do NOT expect raw-Euclidean OPTICS semantics on
+// un-normalized data (other metrics are issue #51). The result is randomized but
+// deterministic in `seed` (identical seed => identical ordering); validate via
+// statistical agreement (Rand/NMI) with exact OPTICS, not bit-identical orderings.
+//
+//   epsilon       : generating distance -- a Euclidean radius on the unit sphere, in
+//                   [0, 2]. Like OPTICS it bounds the (approximate) neighborhoods; set it
+//                   generously to reveal structure across scales. <= 0 => 2.0 (keep all
+//                   CEOs candidates; the candidate pool is bounded regardless).
+//   n_projections : D Gaussian random vectors (more => higher recall, more time).
+//   k, m          : CEOs tunables (top-k extreme vectors/point; top-m extreme points/
+//                   vector). 0 => defaults (k = 10, m = 2*min_pts).
+//   seed          : RNG seed for the projections (determinism).
+//   n_threads     : workers for the parallel projection/candidate phases (0 => hw).
+template <class T, std::size_t Dim>
+std::vector<reachability_dist> compute_soptics_reachability_dists(
+		const std::vector<std::array<T, Dim>>& points, std::size_t min_pts,
+		double epsilon = -1.0, unsigned n_projections = 1024, unsigned k = 0,
+		std::size_t m = 0, unsigned seed = 42, unsigned n_threads = 0 ) {
+
+	static_assert( std::is_floating_point_v<T>, "compute_soptics_reachability_dists: coordinate type 'T' must be float or double" );
+	static_assert( Dim >= 1, "compute_soptics_reachability_dists: dimension must be >= 1" );
+	if ( min_pts < 1 ) { throw std::invalid_argument( "compute_soptics_reachability_dists: min_pts must be >= 1" ); }
+	if ( points.empty() ) { return {}; }
+
+	// L2-normalize onto the unit sphere (cosine metric). A zero-norm point (the origin)
+	// has no direction; leave it unchanged -- it is a degenerate input either way.
+	std::vector<std::array<T, Dim>> unit( points.size() );
+	for ( std::size_t i = 0; i < points.size(); ++i ) {
+		double nrm_sq = 0.0;
+		for ( std::size_t c = 0; c < Dim; ++c ) {
+			const double v = static_cast<double>( points[i][c] );
+			nrm_sq += v * v;
+		}
+		const double nrm = std::sqrt( nrm_sq );
+		if ( nrm > 0.0 ) {
+			for ( std::size_t c = 0; c < Dim; ++c ) { unit[i][c] = static_cast<T>( static_cast<double>( points[i][c] ) / nrm ); }
+		} else {
+			unit[i] = points[i];
+		}
+	}
+
+	// On the unit sphere all Euclidean distances lie in [0, 2]; the permissive default
+	// keeps every CEOs candidate (the pool is bounded by ~2*k*m anyway).
+	const double eps = ( epsilon <= 0.0 ) ? 2.0 : epsilon;
+
+	detail::CeosParams params;
+	params.n_projections = n_projections;
+	params.k = k;
+	params.m = m;
+	params.seed = seed;
+	params.n_threads = n_threads;
+	const auto neighbors = detail::ceos_neighbors( unit, eps, min_pts, params );
+
+	// Share the OPTICS ordering driver: neighbors come from the CEOs index, and the
+	// core-distance is the min_pts-th nearest among those candidates (the existing scan).
+	detail::PhaseProfiler prof;
+	const auto neighbors_of = [&]( std::size_t idx ) -> const std::vector<std::size_t>& { return neighbors[idx]; };
+	const auto core_dist_of = [&]( std::size_t idx, const std::vector<std::size_t>& nbrs ) -> std::optional<double> {
+		return detail::compute_core_dist( unit[idx], unit, nbrs, min_pts );
+	};
+	auto result = detail::optics_order<T, Dim>( unit, neighbors_of, core_dist_of, prof );
+	prof.report( points.size() );
+	return result;
+}
+
+
 //=== Threshold (DBSCAN-style) cluster extraction ============================
 
 // Cuts the reachability plot at a threshold: contiguous runs below it become
