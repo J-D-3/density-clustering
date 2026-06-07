@@ -69,13 +69,21 @@ probes availability and skips the column cleanly otherwise.
 - **sOPTICS.** Matches the exact methods in its cosine regime (8-D cosine blobs: identical ARI
   ≈0.78) and is honestly lower on Euclidean layouts (metric mismatch). It crosses over to faster
   than exact OPTICS only at larger n / higher density (see `optics_soptics_compare`).
-- **Quality parity.** ours-OPTICS and dbscan-R are comparable on the Franti sets, each leading on
-  different ones; both trail HDBSCAN on a few (HDBSCAN is robust by design).
+- **Quality parity.** At the **knee** eps, ours-OPTICS matches or beats dbscan-R on most Franti sets
+  (e.g. R15 0.95 vs 0.91, aggregation 0.97 vs 0.54); HDBSCAN is still strongest on a few.
+- **Generating-distance estimator matters a lot on clustered data (#57).** The uniform-density
+  `epsilon_estimation` over-shoots on clustered data and over-smooths the reachability, so Xi
+  under-segments — most starkly on R15 (ARI **0.43**). The k-distance-knee estimator
+  (`epsilon_estimation_knee`, #41) lands near the within-cluster scale and recovers it (R15 ARI
+  **0.95**), and also helps compound, spiral, and density. The quality harness now defaults to
+  `--eps knee` (passed to dbscan-R too, so timing stays a fair same-eps comparison). It was NOT the
+  Xi steep-area logic — a decoupled `min_cluster_size` (added for ELKI parity) had no effect on R15.
 
 ## TODOs
 
-- **[bug] our Xi under-segments R15** — ours ARI 0.43 vs dbscan-R 0.91, HDBSCAN 0.99 on the 15-cluster
-  R15 set. Filed as its own issue; investigate `get_chi_clusters_flat` on many-tight-cluster data.
+- **Consider the knee estimator as the auto-eps default for `extract_xi` / `cluster_threshold`** —
+  it is clearly better on clustered data (#57). A semver/behavior decision (currently opt-in: pass
+  `optics::epsilon_estimation_knee(...)` as `epsilon`).
 - **sOPTICS 16-D quality dip** — cos-blobs-16d ARI 0.57 vs ~0.82 for the exact methods; check
   CEOs params (D / k / m) and curse-of-dimensionality.
 - **Reproduce the dbscan JSS benchmark** (replication script) to validate our setup against

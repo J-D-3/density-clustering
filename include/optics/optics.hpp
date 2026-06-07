@@ -536,7 +536,13 @@ struct SDA {
 }  // namespace detail
 
 
-inline std::vector<chi_cluster_indices> get_chi_clusters_flat( const std::vector<reachability_dist>& reach_dists_, const double chi, std::size_t min_pts, double steep_area_min_diff = 0.0 ) {
+inline std::vector<chi_cluster_indices> get_chi_clusters_flat( const std::vector<reachability_dist>& reach_dists_, const double chi, std::size_t min_pts, double steep_area_min_diff = 0.0, std::size_t min_cluster_size = 0 ) {
+	// The Xi extractor's steep-area span cap and minimum cluster size. Historically these
+	// reused min_pts (the ordering's *density* parameter), which over-merges many tight,
+	// similar-density clusters at a moderate min_pts (issue #57). min_cluster_size > 0
+	// decouples them; 0 => use min_pts, preserving the original behavior (and the pinned
+	// chi_test_* results).
+	const std::size_t mcs = ( min_cluster_size > 0 ) ? min_cluster_size : min_pts;
 	std::vector<std::pair<std::size_t, std::size_t>> clusters;
 	std::vector<detail::SDA> SDAs;
 	const std::size_t n_reachdists = reach_dists_.size();
@@ -570,24 +576,24 @@ inline std::vector<chi_cluster_indices> get_chi_clusters_flat( const std::vector
 			sda.mib = std::max( sda.mib, mib );
 		}
 	};
-	const auto get_sda_end = [&n_reachdists, &get_reach_dist, &min_pts, &is_steep_down_pt]( const std::size_t start_idx ) -> std::size_t {
+	const auto get_sda_end = [&n_reachdists, &get_reach_dist, &mcs, &is_steep_down_pt]( const std::size_t start_idx ) -> std::size_t {
 		assert( is_steep_down_pt( start_idx ) );
 		std::size_t last_sd_idx = start_idx;
 		std::size_t idx = start_idx + 1;
 		while ( idx < n_reachdists ) {
-			if ( idx - last_sd_idx >= min_pts ) { return last_sd_idx; }
+			if ( idx - last_sd_idx >= mcs ) { return last_sd_idx; }
 			if ( get_reach_dist( idx ) > get_reach_dist( idx - 1 ) ) { return last_sd_idx; }
 			if ( is_steep_down_pt( idx ) ) { last_sd_idx = idx; }
 			idx++;
 		}
 		return std::max( n_reachdists - 2, last_sd_idx );
 	};
-	const auto get_sua_end = [&n_reachdists, &get_reach_dist, &min_pts, &is_steep_up_pt]( const std::size_t start_idx ) -> std::size_t {
+	const auto get_sua_end = [&n_reachdists, &get_reach_dist, &mcs, &is_steep_up_pt]( const std::size_t start_idx ) -> std::size_t {
 		assert( is_steep_up_pt( start_idx ) );
 		std::size_t last_su_idx = start_idx;
 		std::size_t idx = start_idx + 1;
 		while ( idx < n_reachdists ) {
-			if ( idx - last_su_idx >= min_pts ) { return last_su_idx; }
+			if ( idx - last_su_idx >= mcs ) { return last_su_idx; }
 			if ( get_reach_dist( idx ) < get_reach_dist( idx - 1 ) ) { return last_su_idx; }
 			if ( is_steep_up_pt( idx ) ) { last_su_idx = idx; }
 			idx++;
@@ -617,13 +623,13 @@ inline std::vector<chi_cluster_indices> get_chi_clusters_flat( const std::vector
 		assert( false );
 		return { 0, 0 };
 	};
-	const auto valid_combination = [&chi, &steep_area_min_diff, &min_pts, &get_reach_dist]( const detail::SDA& sda, std::size_t sua_begin_idx, std::size_t sua_end_idx ) -> bool {
+	const auto valid_combination = [&chi, &steep_area_min_diff, &mcs, &get_reach_dist]( const detail::SDA& sda, std::size_t sua_begin_idx, std::size_t sua_end_idx ) -> bool {
 		const double f = std::max( chi, steep_area_min_diff );
 		if ( sda.mib > get_reach_dist( sua_end_idx + 1 ) * ( 1 - f ) ) { return false; }
 
 		std::size_t sda_middle = ( sda.begin_idx + ( sda.end_idx - sda.begin_idx ) / 2 );
 		std::size_t sua_middle = ( sua_begin_idx + ( sua_end_idx - sua_begin_idx ) / 2 );
-		if ( sua_middle - sda_middle < min_pts - 2 ) {
+		if ( sua_middle - sda_middle < mcs - 2 ) {
 			return false;
 		}
 		return true;
@@ -722,8 +728,8 @@ inline std::vector<cluster_tree> flat_clusters_to_tree( const std::vector<chi_cl
 }
 
 
-inline std::vector<cluster_tree> get_chi_clusters( const std::vector<reachability_dist>& reach_dists, const double chi, std::size_t min_pts, const double steep_area_min_diff = 0.0 ) {
-	auto clusters_flat = get_chi_clusters_flat( reach_dists, chi, min_pts, steep_area_min_diff );
+inline std::vector<cluster_tree> get_chi_clusters( const std::vector<reachability_dist>& reach_dists, const double chi, std::size_t min_pts, const double steep_area_min_diff = 0.0, std::size_t min_cluster_size = 0 ) {
+	auto clusters_flat = get_chi_clusters_flat( reach_dists, chi, min_pts, steep_area_min_diff, min_cluster_size );
 	return flat_clusters_to_tree( clusters_flat );
 }
 
@@ -871,9 +877,9 @@ template <class T, std::size_t Dim, class Backend = NanoflannBackend<T, Dim>>
 std::vector<std::vector<std::size_t>> extract_xi(
 	const std::vector<std::array<T, Dim>>& points, std::size_t min_pts, double chi = 0.05,
 	double epsilon = -1.0, NeighborMode mode = NeighborMode::OnDemand, unsigned n_threads = 0,
-	double steep_area_min_diff = 0.0 ) {
+	double steep_area_min_diff = 0.0, std::size_t min_cluster_size = 0 ) {
 	const auto reach = compute_reachability_dists<T, Dim, Backend>( points, min_pts, epsilon, mode, n_threads );
-	const auto flat = get_chi_clusters_flat( reach, chi, min_pts, steep_area_min_diff );
+	const auto flat = get_chi_clusters_flat( reach, chi, min_pts, steep_area_min_diff, min_cluster_size );
 	return get_cluster_indices( reach, flat );
 }
 

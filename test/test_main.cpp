@@ -1172,6 +1172,50 @@ TEST_CASE("sOPTICS: edge cases (empty, < min_pts, identical points, high-D)") {
 }
 
 
+TEST_CASE("Xi min_cluster_size: decoupled from min_pts, default-preserving (#57)") {
+	const auto pts = optics::testdata::make_blobs<double, 2>( 5, 60, 30.0, 1.0, 3u );
+	const std::size_t min_pts = 10;
+	const auto reach = optics::compute_reachability_dists( pts, min_pts );
+
+	// min_cluster_size 0 (default) resolves to min_pts -> identical to passing min_pts
+	// explicitly, so existing behavior (and the chi_test_* cases) is unchanged.
+	const auto base = optics::get_chi_clusters_flat( reach, 0.05, min_pts );
+	const auto same = optics::get_chi_clusters_flat( reach, 0.05, min_pts, 0.0, min_pts );
+	CHECK( ( base == same ) );
+
+	// A different (smaller) min_cluster_size is accepted and yields valid ranges.
+	const auto smaller = optics::get_chi_clusters_flat( reach, 0.05, min_pts, 0.0, 3 );
+	for ( const auto& c : smaller ) { CHECK( c.first <= c.second ); REQUIRE( c.second < reach.size() ); }
+	// get_chi_clusters (tree) plumbs the same parameter.
+	CHECK( !optics::get_chi_clusters( reach, 0.05, min_pts, 0.0, 3 ).empty() );
+}
+
+
+TEST_CASE("knee epsilon: smaller than uniform on clustered data, yields good Xi clusters (#57)") {
+	// 15 tight blobs. make_blobs emits blob b's points contiguously, so point i's ground-
+	// truth label is i / points_per_blob. The under-segmentation that motivated #57 is the
+	// uniform-density epsilon_estimation over-shooting on clustered data and over-smoothing
+	// the reachability; the k-distance-knee estimator lands near the within-cluster scale.
+	// (The dramatic R15 recovery is shown in docs/benchmarking.md; that data is not bundled.)
+	const std::size_t n_blobs = 15, per = 40, min_pts = 10;
+	const auto pts = optics::testdata::make_blobs<double, 2>( n_blobs, per, 60.0, 0.4, 11u );
+	const std::size_t n = pts.size();
+	std::vector<long long> truth( n );
+	for ( std::size_t i = 0; i < n; ++i ) { truth[i] = static_cast<long long>( i / per ); }
+
+	const double eps_uniform = optics::epsilon_estimation( pts, min_pts );
+	const double eps_knee = optics::epsilon_estimation_knee( pts, min_pts );
+	CHECK( eps_knee < eps_uniform );  // the mechanism behind #57
+	CHECK( eps_knee > 0.0 );
+
+	// The knee eps produces a valid, high-quality Xi clustering of the tight blobs.
+	const auto reach = optics::compute_reachability_dists( pts, min_pts, eps_knee );
+	const auto labels = labels_from_clusters(
+		n, optics::get_cluster_indices( reach, optics::get_chi_clusters_flat( reach, 0.05, min_pts ) ) );
+	CHECK( rand_index( truth, labels ) > 0.9 );
+}
+
+
 TEST_CASE("backend matrix: clustering is consistent across neighbor-search backends") {
 	static const std::size_t N = 2;
 	const std::vector<std::array<double, N>> centers = { { 0, 0 }, { 60, 0 }, { 30, 50 } };

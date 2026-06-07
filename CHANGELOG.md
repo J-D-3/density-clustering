@@ -30,6 +30,14 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
 - `tools/fetch_datasets.py` + `tools/run_dbscan_r.R` — fetch Franti's third-party benchmark "shape
   sets" (Aggregation/Compound/spiral/R15/jain/flame/D31) and run mhahsler/dbscan's OPTICS+Xi; both
   used by the quality harness.
+- Optional `min_cluster_size` parameter on `get_chi_clusters_flat` / `get_chi_clusters` / `extract_xi`
+  — decouples the Xi extractor's minimum-cluster-size / steep-area span cap from `min_pts` (ELKI
+  parity). `0` (default) uses `min_pts`, so existing behavior and the `chi_test_*` cases are unchanged
+  (#57).
+- **Benchmark finding (#57):** the under-segmentation of clustered data (starkly R15: ARI 0.43) is the
+  uniform-density `epsilon_estimation` over-shooting, not the Xi logic; `epsilon_estimation_knee` (#41)
+  recovers it (R15 ARI 0.95). `tools/quality_benchmark.py` now defaults to `--eps knee`. See
+  `docs/benchmarking.md`.
 
 ## [0.9.2] — 2026-06-07
 

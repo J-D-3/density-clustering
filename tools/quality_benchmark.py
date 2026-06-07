@@ -78,9 +78,10 @@ def write_coords(X, path):
             w.writerow([f"{v:.6g}" for v in row])
 
 
-def run_ours(exe, path, min_pts, chi):
+def run_ours(exe, path, min_pts, chi, eps_spec):
     """Returns (optics_labels, soptics_labels, optics_ms, soptics_ms, eps)."""
-    r = subprocess.run([exe, path, str(min_pts), str(chi)], capture_output=True, text=True, check=True)
+    r = subprocess.run([exe, path, str(min_pts), str(chi), "0", eps_spec],
+                       capture_output=True, text=True, check=True)
     opt, sopt = [], []
     reader = csv.DictReader(r.stdout.splitlines())
     for row in reader:
@@ -181,6 +182,8 @@ def main(argv=None):
                    help="dir with Franti *_coords.csv/*_truth.csv (run tools/fetch_datasets.py)")
     p.add_argument("--rscript", default=None, help="path to Rscript (auto-detected if omitted)")
     p.add_argument("--no-dbscan-r", action="store_true", help="skip the mhahsler/dbscan (R) column")
+    p.add_argument("--eps", choices=("knee", "uniform"), default="knee",
+                   help="generating-distance estimator (knee is better on clustered data; #57)")
     args = p.parse_args(argv)
 
     exe = os.path.abspath(args.exe)
@@ -205,7 +208,7 @@ def main(argv=None):
     for name, X, truth in data:
         path = os.path.join(args.data_dir, f"qb_{name.replace(':', '_')}.csv")
         write_coords(X, path)
-        o_lab, s_lab, o_ms, s_ms, eps = run_ours(exe, path, args.min_pts, args.chi)
+        o_lab, s_lab, o_ms, s_ms, eps = run_ours(exe, path, args.min_pts, args.chi, args.eps)
         sk_lab, sk_ms = run_sklearn_optics(X, args.min_pts, args.chi)
         hd_lab = run_sklearn_hdbscan(X, args.min_pts)
         preds = {"ours-OPTICS": o_lab, "ours-sOPTICS": s_lab, "sk-OPTICS": sk_lab, "sk-HDBSCAN": hd_lab}
@@ -246,7 +249,9 @@ def main(argv=None):
         cells = " ".join(f"{timing[nm].get(m, float('nan')):13.0f}" for m in tmeth)
         print(f"{nm:18s} {cells}")
 
-    print("\nNotes: sOPTICS is a COSINE method (strong on cos-blobs-*, lower on Euclidean layouts).")
+    print(f"\nNotes: generating distance = '{args.eps}' estimator (knee is far better on clustered")
+    print("data, e.g. R15: ARI 0.43 -> 0.95; see #57). sOPTICS is a COSINE method (strong on")
+    print("cos-blobs-*, lower on Euclidean layouts).")
     print("ours-OPTICS and dbscan-R are both exact-Euclidean OPTICS run at the SAME eps (fair")
     print("timing); tie-breaking differs, so compare clusters (ARI/NMI/Rand), not bit-identical")
     print("orderings. Franti datasets: cs.uef.fi/sipu/datasets (fetch with tools/fetch_datasets.py).")
