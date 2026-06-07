@@ -13,6 +13,8 @@
 #include <optics/optics.hpp>
 #include <optics/io.hpp>
 
+#include "../shared/csv_io.hpp"
+
 #include <array>
 #include <chrono>
 #include <cstdlib>
@@ -39,25 +41,15 @@ int main( int argc, char** argv ) {
 	const double threshold = ( argc > 5 ) ? std::atof( argv[5] ) : 25.0;
 	const double min_cluster_frac = ( argc > 6 ) ? std::atof( argv[6] ) : 0.01;
 
-	// Read the RGB cloud.
+	// Read the RGB cloud (CSV: r,g,b per row, optional header; extra columns ignored).
 	const auto t_read0 = clk::now();
-	std::vector<std::array<float, 3>> points;
-	std::ifstream in( in_path );
-	if ( !in ) { std::cerr << "cannot open " << in_path << "\n"; return 1; }
-	std::string line;
-	while ( std::getline( in, line ) ) {
-		if ( line.empty() ) { continue; }
-		std::array<float, 3> p{};
-		std::size_t k = 0;
-		std::stringstream ss( line );
-		std::string tok;
-		bool ok = true;
-		while ( k < 3 && std::getline( ss, tok, ',' ) ) {
-			try { p[k] = std::stof( tok ); } catch ( ... ) { ok = false; break; }
-			++k;
-		}
-		if ( ok && k == 3 ) { points.push_back( p ); }  // non-numeric (header) rows are skipped
+	std::vector<double> flat;
+	std::size_t n = 0, dim = 0;
+	if ( !example_io::read_csv( in_path, flat, n, dim ) || dim < 3 ) {
+		std::cerr << "could not read an RGB cloud (>= 3 columns) from " << in_path << "\n";
+		return 1;
 	}
+	const auto points = example_io::pack<float, 3>( flat, n, dim );
 	const auto t_read1 = clk::now();
 	std::cout << "loaded " << points.size() << " RGB points from " << in_path << "\n";
 	if ( points.empty() ) { return 1; }

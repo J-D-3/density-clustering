@@ -18,6 +18,8 @@
 #include <optics/optics.hpp>
 #include <optics/io.hpp>
 
+#include "../shared/csv_io.hpp"
+
 #include <array>
 #include <chrono>
 #include <cstdlib>
@@ -33,21 +35,6 @@ using clk = std::chrono::steady_clock;
 long long ms( clk::time_point a, clk::time_point b ) {
 	const auto us = std::chrono::duration_cast<std::chrono::microseconds>( b - a ).count();
 	return ( us + 999 ) / 1000;
-}
-
-// Split a CSV line into trimmed tokens.
-std::vector<std::string> split( const std::string& line ) {
-	std::vector<std::string> out;
-	std::stringstream ss( line );
-	std::string tok;
-	while ( std::getline( ss, tok, ',' ) ) { out.push_back( tok ); }
-	return out;
-}
-
-bool is_number( const std::string& s ) {
-	if ( s.empty() ) { return false; }
-	try { std::size_t n = 0; (void)std::stod( s, &n ); return n == s.size(); }
-	catch ( ... ) { return false; }
 }
 
 // Run OPTICS for a compile-time dimension over a flat row-major coordinate buffer.
@@ -111,46 +98,14 @@ int main( int argc, char** argv ) {
 	const double xi_chi = ( argc > 7 ) ? std::atof( argv[7] ) : 0.0;
 	const unsigned n_threads = ( argc > 8 ) ? static_cast<unsigned>( std::atoi( argv[8] ) ) : 1u;
 
-	std::ifstream in( in_path );
-	if ( !in ) { std::cerr << "cannot open " << in_path << "\n"; return 1; }
-
-	// Determine the dimension. If the first line is non-numeric it is a header;
-	// count its x-prefixed columns. Otherwise infer from the field count.
-	std::string line;
-	std::size_t dim = 0;
+	// Read the cloud (dimension detected from the header / field count).
 	std::vector<double> flat;
-	std::size_t n = 0;
-	if ( std::getline( in, line ) ) {
-		const auto tok = split( line );
-		bool header = false;
-		for ( const auto& t : tok ) { if ( !is_number( t ) ) { header = true; break; } }
-		if ( header ) {
-			for ( const auto& t : tok ) { if ( !t.empty() && t[0] == 'x' ) { ++dim; } }
-			if ( dim == 0 ) { dim = tok.size(); }  // header without x* names
-		} else {
-			dim = tok.size();
-			// the first line is data: parse it now
-			for ( std::size_t d = 0; d < dim; ++d ) { flat.push_back( std::stod( tok[d] ) ); }
-			++n;
-		}
+	std::size_t n = 0, dim = 0;
+	if ( !example_io::read_csv( in_path, flat, n, dim ) ) {
+		std::cerr << "could not read points from " << in_path << "\n";
+		return 1;
 	}
-	if ( dim == 0 ) { std::cerr << "could not determine dimension from " << in_path << "\n"; return 1; }
-
-	while ( std::getline( in, line ) ) {
-		if ( line.empty() ) { continue; }
-		const auto tok = split( line );
-		if ( tok.size() < dim ) { continue; }
-		bool ok = true;
-		const std::size_t base = flat.size();
-		for ( std::size_t d = 0; d < dim; ++d ) {
-			if ( !is_number( tok[d] ) ) { ok = false; break; }
-			flat.push_back( std::stod( tok[d] ) );
-		}
-		if ( ok ) { ++n; } else { flat.resize( base ); }
-	}
-
 	std::cout << "loaded " << n << " points (" << dim << "-D) from " << in_path << "\n";
-	if ( n == 0 ) { return 1; }
 
 	switch ( dim ) {
 		case 2:  return run<2>( flat, n, out_prefix, min_pts, eps, threshold, min_cluster_frac, n_threads, xi_chi );
