@@ -40,7 +40,7 @@ The pipeline lives under `include/optics/`. Public entry point is `optics.hpp`.
 2. **Extraction:**
    - Threshold cut: `get_cluster_indices(reach_dists, threshold)` → flat clusters (noise → singletons; a deliberate simplification of the paper's ExtractDBSCAN, which also used core-distance).
    - Xi / steep-area: `get_chi_clusters_flat(...)` → flat `(begin,end)` ranges; `get_chi_clusters(...)` builds the nested `cluster_tree` (`tree.hpp`). This is paper Defs 9–11 / Fig. 19 and the most subtle code; its behavior is pinned by the `chi_test_*` cases.
-   - One-call convenience wrappers: `cluster_dbscan(points, min_pts, threshold)` (compute + threshold cut), `extract_xi(reach_dists, chi, min_pts)` (Xi clusters as point-index lists), and `convert_cloud<Out>(in)` to lift an integer/byte cloud (e.g. `uint8` color data) to `float`/`double` before clustering.
+   - One-call convenience wrappers, both `(points, min_pts, [param])`: `cluster_threshold(points, min_pts, threshold = auto)` (compute + flat cut; the paper's ExtractDBSCAN — `threshold < 0` ⇒ `detail::default_threshold`, a high reachability percentile; `cluster_dbscan` is a `[[deprecated]]` alias), `extract_xi(points, min_pts, chi = 0.05)` (compute + Xi, flattened — use `get_chi_clusters` for the tree), and `convert_cloud<Out>(in)` to lift an integer/byte cloud (e.g. `uint8` color data) to `float`/`double` before clustering.
 3. **Inspection (optional, no rendering in C++):** `io.hpp` exports dimension-agnostic CSV (`export_points_csv` with `cluster_labels`, `export_reachability_csv`); `tools/visualize.py` renders 2D/3D/PCA scatter + reachability plots with matplotlib.
 
 ### Neighbor-search backend seam

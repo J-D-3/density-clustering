@@ -6,6 +6,17 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
 
 ## [Unreleased]
 
+### Changed
+- **Renamed `cluster_dbscan` → `cluster_threshold`** (C++ and the Python binding): the flat cut is
+  the OPTICS paper's *ExtractDBSCAN* (the same clustering DBSCAN gives at `eps = threshold`), not a
+  DBSCAN run. `cluster_dbscan` stays as a deprecated alias.
+- `cluster_threshold` and `extract_xi` are now a parallel pair, both `(points, min_pts, [param])`:
+  `extract_xi` takes the **point cloud** (was a cluster-ordering) and computes the ordering itself,
+  and `threshold`/`chi` are **optional** — an omitted `threshold` uses an educated default (a high
+  percentile of the reachabilities); `chi` defaults to `0.05`.
+- Runtime-millisecond outputs (examples, benchmarks, timing scripts) now round **up** to the next
+  whole millisecond.
+
 ## [0.9.1] — 2026-06-06
 
 Focus: make the v0.9.0 core **adoptable** — a fast first run on your own data, an honest

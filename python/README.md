@@ -23,10 +23,12 @@ subdirectory on MSVC). Put that directory on `sys.path` or `PYTHONPATH` to impor
 import numpy as np, optics_py
 pts = np.random.default_rng(0).normal(size=(1000, 2))   # (N, Dim), Dim in 1..4
 
-# Flat threshold cut -> per-point labels (-1 = noise)
-labels = optics_py.cluster_dbscan(pts, min_pts=10, threshold=2.0)
+# Flat reachability-threshold cut -> per-point labels (-1 = noise).
+# (The paper's ExtractDBSCAN, not a DBSCAN run. Omit threshold for an educated
+#  default; cluster_dbscan is a deprecated alias of cluster_threshold.)
+labels = optics_py.cluster_threshold(pts, min_pts=10, threshold=2.0)
 
-# Hierarchical xi extraction -> per-point labels
+# Hierarchical xi extraction -> per-point labels (same format as above)
 labels_xi = optics_py.extract_xi(pts, min_pts=10, chi=0.05)
 
 # Raw ordering: point_index + reachability arrays (in cluster order; -1 = UNDEFINED)
