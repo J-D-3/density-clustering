@@ -66,3 +66,8 @@ target_link_libraries(optics_mode_compare PRIVATE optics::optics)
 # normalized blobs. Release config; not a ctest.
 add_executable(optics_soptics_compare Benchmark/soptics_compare.cpp)
 target_link_libraries(optics_soptics_compare PRIVATE optics::optics)
+
+# Emits OPTICS + sOPTICS predicted labels for a CSV cloud (for tools/quality_benchmark.py
+# to score ARI/NMI/Rand vs ground truth). Release config; not a ctest.
+add_executable(optics_quality_compare Benchmark/quality_compare.cpp)
+target_link_libraries(optics_quality_compare PRIVATE optics::optics)

@@ -29,6 +29,29 @@ and `cluster_csv` reads them).
 | `validate_sklearn.py` | Cross-check our reachability + labels against `sklearn.cluster.OPTICS` (Spearman + ARI). |
 | `timing_compare.py` | Time the internal backends (nanoflann / approx / Boost) vs `sklearn.cluster.OPTICS` across cases; needs the `optics_backend_compare` harness. |
 | `timing_images.py` | Color-clustering runtime on RGB images: internal backends vs scikit-learn OPTICS / DBSCAN / KMeans on the same sampled pixel cloud. |
+| `quality_benchmark.py` | Score OPTICS + sOPTICS (ours) and scikit-learn OPTICS + HDBSCAN against ground truth (ARI / NMI / Rand), plus an ours-vs-sklearn timing table; needs the `optics_quality_compare` harness. |
+
+```sh
+cmake --build --preset msvc --target optics_quality_compare
+python tools/quality_benchmark.py --exe build/test/Release/optics_quality_compare
+```
+
+Note: **sOPTICS is a cosine method** — it scores well on the `cos-blobs-*` (direction-based)
+rows and lower on the Euclidean 2-D toys; that is the metric, not a defect. `sk-OPTICS` uses
+Xi extraction, which is parameter-sensitive (so it can score low at the default `xi`).
+
+## Comparing against external engines (#53)
+
+The strongest CPU competitors are not bundled and are **not invoked** by the scripts above
+(their licenses prevent vendoring, and they need their own runtimes). To add them to a timing
+comparison, install and run them on the same coordinate CSVs the harnesses write to `data/`,
+then drop their per-dataset milliseconds into the tables by hand or extend the scripts:
+
+- **ELKI** (Java; OPTICSXi / FastOPTICS / HDBSCAN\*): `java -jar elki.jar KDDCLIApplication
+  -algorithm clustering.optics.OPTICSXi -dbc.in data/qb_blobs-2d.csv ...`.
+- **mhahsler/dbscan** (R; ANN kd-tree OPTICS): `Rscript -e 'optics(read.csv(...), eps=..., minPts=...)'`.
+- **NinhPham/sDbscan** (C++; the direct sOPTICS competitor): build from source, run on the
+  same CSVs. See `documentation/references.md` for links and licensing notes.
 
 ## End-to-end
 

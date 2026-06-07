@@ -19,6 +19,12 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
   neighbor-provider + core-distance-provider pair. Behavior-preserving for OPTICS (orderings unchanged).
 - `documentation/` — archived sources for the random-projection work (the sDBSCAN/sOPTICS paper plus a
   `references.md` of citations, comparison targets, and licensing notes).
+- Benchmarks: `optics_soptics_compare` (sOPTICS vs exact OPTICS — Rand index + timing on synthetic
+  normalized blobs) and `optics_quality_compare` (emits OPTICS/sOPTICS predicted labels for a CSV cloud).
+- `tools/quality_benchmark.py` — a clustering-quality harness scoring OPTICS + sOPTICS (ours) and
+  scikit-learn OPTICS + HDBSCAN against ground-truth labels with **ARI / NMI / Rand**, plus an
+  ours-vs-scikit-learn timing table (#54, and the runnable part of #53). Integration notes for the
+  external engines (ELKI, mhahsler/dbscan, sDbscan) are in `tools/README.md` (they are not bundled).
 
 ## [0.9.2] — 2026-06-07
 
