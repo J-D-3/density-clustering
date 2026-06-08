@@ -7,6 +7,15 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
 ## [Unreleased]
 
 ### Added
+- **Non-Euclidean metrics for sOPTICS** (`Metric` enum + `metric` / `kernel_scale` arguments on
+  `compute_soptics_reachability_dists`): `Metric::L2` and `Metric::L1` embed points into random Fourier
+  features (`include/optics/detail/random_features.hpp`) whose cosine similarity approximates the
+  Gaussian / Laplacian kernel (Rahimi & Recht 2007), then run the existing cosine CEOs/sOPTICS pipeline
+  on the features — so the cluster-ordering tracks Euclidean / Manhattan distance on the *original* data.
+  `kernel_scale <= 0` uses a median-distance auto bandwidth. `Metric::Cosine` (default) is unchanged.
+  χ² / Jensen-Shannon are not yet implemented (they need non-negative histogram inputs and a different
+  feature construction) — see #51. Validated by Rand-index agreement with exact Euclidean OPTICS and
+  seed-determinism (#51).
 - **Distance reuse on the exact OPTICS path** (#55): a new optional `RadiusSearchWithDists` backend capability
   lets the ordering reuse the squared distances the neighbor search already computed, instead of recomputing
   them in the core-distance scan *and* the relaxation. `NanoflannBackend` models it for `double` coordinates,
