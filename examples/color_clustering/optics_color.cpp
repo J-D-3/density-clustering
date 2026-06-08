@@ -15,6 +15,7 @@
 
 #include "../shared/csv_io.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdlib>
@@ -54,17 +55,31 @@ int main( int argc, char** argv ) {
 	std::cout << "loaded " << points.size() << " RGB points from " << in_path << "\n";
 	if ( points.empty() ) { return 1; }
 
-	// Cluster the color space.
+	// Cluster the color space. Images have large flat-color regions, so we first DEDUPLICATE
+	// identical pixels into unique colors carrying a weight (count) and run weight-aware OPTICS on
+	// the small unique cloud (issue #46): a flat region of N identical pixels collapses to one
+	// point, so its O(neighborhood) ordering cost vanishes. The clustering is lossless -- expanding
+	// back gives the same per-pixel partition as clustering the full cloud, just far faster.
+	const auto t_dedup0 = clk::now();
+	const auto dedup = optics::deduplicate( points );
+	const auto t_dedup1 = clk::now();
+	const double collapse = static_cast<double>( points.size() ) / static_cast<double>( std::max<std::size_t>( dedup.unique_points.size(), 1 ) );
+	std::cout << "deduplicated " << points.size() << " px -> " << dedup.unique_points.size()
+			  << " unique colors (" << collapse << "x collapse)\n";
+
 	const auto t_optics0 = clk::now();
-	const auto reach = optics::compute_reachability_dists( points, min_pts, eps );
+	const auto reach = optics::compute_reachability_dists(
+		dedup.unique_points, min_pts, eps, optics::NeighborMode::OnDemand, 0, optics::CoreDistMode::Scan, 0, dedup.weights );
 	const auto t_optics1 = clk::now();
-	const auto clusters = optics::get_cluster_indices( reach, threshold );
+	const auto unique_clusters = optics::get_cluster_indices( reach, threshold );
+	const auto clusters = optics::expand_clusters_to_original( unique_clusters, dedup.unique_of_original );
 	const std::size_t min_size = static_cast<std::size_t>( min_cluster_frac * static_cast<double>( points.size() ) );
 	const auto labels = optics::io::cluster_labels( points.size(), clusters, min_size );
 	const auto t_extract = clk::now();
 
-	std::cout << "timing: csv-read " << ms( t_read0, t_read1 ) << " ms | OPTICS ordering "
-			  << ms( t_optics0, t_optics1 ) << " ms | extract " << ms( t_optics1, t_extract ) << " ms\n";
+	std::cout << "timing: csv-read " << ms( t_read0, t_read1 ) << " ms | dedup " << ms( t_dedup0, t_dedup1 )
+			  << " ms | OPTICS ordering " << ms( t_optics0, t_optics1 ) << " ms | extract "
+			  << ms( t_optics1, t_extract ) << " ms\n";
 
 	optics::io::export_points_csv( out_path, points, labels );
 
