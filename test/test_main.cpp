@@ -8,6 +8,7 @@
 #include "third_party/doctest.h"
 
 #include "../include/optics/optics.hpp"
+#include "../include/optics/hdbscan.hpp"
 #include "../include/optics/testdata.hpp"
 #include "../include/optics/io.hpp"
 #include "../include/optics/detail/hadamard.hpp"
@@ -1761,6 +1762,118 @@ TEST_CASE("sOPTICS auto-eps recovers high-D Xi clusters (#58 16-D dip)") {
 	// Auto-eps sOPTICS Xi tracks exact OPTICS Xi; the old eps=2.0 default does markedly worse.
 	CHECK( rand_index( exact_xi, auto_xi ) > 0.9 );
 	CHECK( rand_index( exact_xi, auto_xi ) > rand_index( exact_xi, old_xi ) );
+}
+
+
+//=== HDBSCAN* (issue #52) ===================================================
+
+static std::vector<long long> to_ll( const std::vector<int>& v ) {
+	return std::vector<long long>( v.begin(), v.end() );
+}
+
+TEST_CASE("hdbscan: separated blobs -> exact cluster count, agrees with ground truth") {
+	const std::vector<std::array<double, 2>> centers = { { 0, 0 }, { 100, 0 }, { 50, 100 } };
+	const std::size_t per = 30;
+	const auto pts = optics::testdata::gaussian_blobs<double, 2>( centers, per, 1.5 );
+	const std::size_t n = pts.size();
+
+	const auto res = optics::hdbscan( pts, 5 );
+	REQUIRE( res.labels.size() == n );
+	REQUIRE( res.probabilities.size() == n );
+	CHECK( res.n_clusters == 3 );
+
+	// Recovers the planted partition (gaussian_blobs lays out blob by blob).
+	std::vector<long long> truth( n );
+	for ( std::size_t i = 0; i < n; ++i ) { truth[i] = static_cast<long long>( i / per ); }
+	CHECK( rand_index( to_ll( res.labels ), truth ) > 0.95 );
+
+	// Probabilities are a valid [0,1] membership; clustered points carry positive strength.
+	for ( std::size_t i = 0; i < n; ++i ) {
+		CHECK( res.probabilities[i] >= 0.0 );
+		CHECK( res.probabilities[i] <= 1.0 );
+		if ( res.labels[i] < 0 ) { CHECK( res.probabilities[i] == 0.0 ); }
+	}
+
+	// Deterministic: identical input => identical labelling.
+	const auto again = optics::hdbscan( pts, 5 );
+	CHECK( ( res.labels == again.labels ) );
+}
+
+
+TEST_CASE("hdbscan: far-flung points are labelled noise") {
+	const std::vector<std::array<double, 2>> centers = { { 0, 0 }, { 100, 0 } };
+	auto pts = optics::testdata::gaussian_blobs<double, 2>( centers, 30, 1.0 );
+	const std::size_t n_clustered = pts.size();
+	// Three isolated outliers, each alone in a vast empty region.
+	pts.push_back( { 500, 500 } );
+	pts.push_back( { -500, 500 } );
+	pts.push_back( { 500, -500 } );
+
+	const auto res = optics::hdbscan( pts, 5 );
+	CHECK( res.n_clusters == 2 );
+	for ( std::size_t i = n_clustered; i < pts.size(); ++i ) {
+		CHECK( res.labels[i] == -1 );          // outliers are noise
+		CHECK( res.probabilities[i] == 0.0 );
+	}
+}
+
+
+TEST_CASE("hdbscan: allow_single_cluster toggles the trivial one-cluster answer") {
+	const std::vector<std::array<double, 2>> centers = { { 0, 0 } };
+	const auto pts = optics::testdata::gaussian_blobs<double, 2>( centers, 40, 1.0 );
+	const std::size_t n = pts.size();
+
+	// min_cluster_size == n: no split ever leaves min_cluster_size on both sides, so the only
+	// cluster is the root. By default the root is suppressed (=> all noise); allow_single keeps it.
+	const auto suppressed = optics::hdbscan( pts, n, 5, optics::ClusterSelectionMethod::EOM, false );
+	CHECK( suppressed.n_clusters == 0 );
+	for ( const int l : suppressed.labels ) { CHECK( l == -1 ); }
+
+	const auto single = optics::hdbscan( pts, n, 5, optics::ClusterSelectionMethod::EOM, true );
+	CHECK( single.n_clusters == 1 );
+	for ( const int l : single.labels ) { CHECK( l == 0 ); }
+}
+
+
+TEST_CASE("hdbscan: leaf selection is at least as fine as EOM") {
+	// Two super-groups, each split into two sub-blobs: a small nested hierarchy.
+	const std::vector<std::array<double, 2>> centers = {
+		{ 0, 0 }, { 6, 0 },        // super-group A (two sub-blobs)
+		{ 100, 0 }, { 106, 0 }     // super-group B (two sub-blobs)
+	};
+	const auto pts = optics::testdata::gaussian_blobs<double, 2>( centers, 40, 0.6 );
+
+	const auto eom = optics::hdbscan( pts, 5, 5, optics::ClusterSelectionMethod::EOM );
+	const auto leaf = optics::hdbscan( pts, 5, 5, optics::ClusterSelectionMethod::Leaf );
+	CHECK( eom.n_clusters >= 2 );
+	CHECK( leaf.n_clusters >= eom.n_clusters );  // leaves are the finest partition
+}
+
+
+TEST_CASE("hdbscan: edge cases and degenerate inputs") {
+	using point = std::array<double, 2>;
+
+	// Empty cloud -> empty result.
+	const std::vector<point> empty;
+	const auto r0 = optics::hdbscan( empty, 3 );
+	CHECK( r0.labels.empty() );
+	CHECK( r0.n_clusters == 0 );
+
+	// Fewer points than min_cluster_size -> every point is noise.
+	const std::vector<point> few = { { 0, 0 }, { 1, 0 }, { 0, 1 } };
+	const auto r1 = optics::hdbscan( few, 5 );
+	CHECK( r1.labels.size() == few.size() );
+	for ( const int l : r1.labels ) { CHECK( l == -1 ); }
+	CHECK( r1.n_clusters == 0 );
+
+	// min_cluster_size < 2 is rejected.
+	const std::vector<point> some = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 1 } };
+	CHECK_THROWS_AS( optics::hdbscan( some, 1 ), std::invalid_argument );
+
+	// All-identical points: degenerate but must not crash; too few distinct to form a cluster.
+	const std::vector<point> dup( 10, point{ 2, 2 } );
+	const auto r2 = optics::hdbscan( dup, 3 );
+	CHECK( r2.labels.size() == dup.size() );
 }
 
 
