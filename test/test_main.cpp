@@ -1392,6 +1392,197 @@ TEST_CASE("HnswBackend: high-D approximate recall + usable OPTICS clustering (#4
 #endif
 
 
+//=== Weighted / unique-point OPTICS (issue #46) =============================
+
+TEST_CASE("weighted core-distance: matches unweighted at weight 1; weighted selection (#46)") {
+	// Distances 0,1,2,3 (squared 0,1,4,9); neighbor indices 0..3.
+	const std::vector<double> sq = { 0.0, 1.0, 4.0, 9.0 };
+	const std::vector<std::size_t> nbr = { 0, 1, 2, 3 };
+
+	// All weight 1 == the unweighted min_pts-th-neighbor distance, for every min_pts.
+	const std::vector<std::size_t> w1 = { 1, 1, 1, 1 };
+	for ( std::size_t mp = 1; mp <= 4; ++mp ) {
+		const auto u = optics::detail::compute_core_dist_from_sq( sq, mp );
+		const auto w = optics::detail::compute_core_dist_weighted_from_sq( sq, nbr, w1, mp );
+		REQUIRE( u.has_value() );
+		REQUIRE( w.has_value() );
+		CHECK( *w == doctest::Approx( *u ) );
+	}
+
+	// Heavy first neighbor (weight 2 at distance 0): min_pts 3 is reached at distance 1.
+	const std::vector<std::size_t> w2 = { 2, 1, 1, 1 };
+	CHECK( *optics::detail::compute_core_dist_weighted_from_sq( sq, nbr, w2, 3 ) == doctest::Approx( 1.0 ) );
+
+	// Self weight alone satisfies min_pts => core-distance 0.
+	const std::vector<std::size_t> w5 = { 5, 1, 1, 1 };
+	CHECK( *optics::detail::compute_core_dist_weighted_from_sq( sq, nbr, w5, 3 ) == doctest::Approx( 0.0 ) );
+
+	// Total weight below min_pts => undefined.
+	CHECK_FALSE( optics::detail::compute_core_dist_weighted_from_sq( sq, nbr, w1, 5 ).has_value() );
+
+	// Point-based variant agrees with the from-squared variant.
+	const std::vector<std::array<double, 1>> pts = { { 0.0 }, { 1.0 }, { 2.0 }, { 3.0 } };
+	CHECK( *optics::detail::compute_core_dist_weighted( pts[0], pts, nbr, w2, 3 ) == doctest::Approx( 1.0 ) );
+}
+
+
+TEST_CASE("deduplicate / expand / quantize preprocessing (#46)") {
+	std::vector<std::array<int, 3>> int_pts = {
+		{ 10, 10, 10 }, { 10, 10, 10 }, { 10, 10, 10 }, { 20, 20, 20 }, { 30, 30, 30 }, { 30, 30, 30 } };
+	const auto cloud = optics::convert_cloud<float>( int_pts );
+	const auto d = optics::deduplicate( cloud );
+
+	CHECK( d.unique_points.size() == 3 );
+	std::size_t sumw = 0;
+	for ( const auto w : d.weights ) { sumw += w; }
+	CHECK( sumw == cloud.size() );
+	// First-seen order: {10},{20},{30} with weights 3,1,2.
+	CHECK( d.weights[0] == 3 );
+	CHECK( d.weights[1] == 1 );
+	CHECK( d.weights[2] == 2 );
+	CHECK( d.unique_of_original[0] == 0 );
+	CHECK( d.unique_of_original[3] == 1 );
+	CHECK( d.unique_of_original[5] == 2 );
+
+	// Expanding unique clusters reconstructs the full original index set, no gaps/dups.
+	const std::vector<std::vector<std::size_t>> uniq_clusters = { { 0, 2 }, { 1 } };  // {10,30} and {20}
+	const auto expanded = optics::expand_clusters_to_original( uniq_clusters, d.unique_of_original );
+	std::set<std::size_t> all;
+	for ( const auto& c : expanded ) { for ( const auto i : c ) { all.insert( i ); } }
+	CHECK( all.size() == cloud.size() );
+
+	// quantize snaps near-identical values onto a grid so they then deduplicate.
+	const std::vector<std::array<float, 3>> ramp = {
+		{ 0.0f, 0.0f, 0.0f }, { 1.0f, 1.0f, 1.0f }, { 2.0f, 2.0f, 2.0f }, { 3.0f, 3.0f, 3.0f } };
+	const auto q = optics::quantize( ramp, 8.0 );  // 0..3 all map to cell centre 4 => identical
+	CHECK( optics::deduplicate( q ).unique_points.size() == 1 );
+	CHECK( optics::quantize( ramp, 0.0 ).size() == ramp.size() );  // non-positive bin is a no-op
+}
+
+
+TEST_CASE("weighted dedup OPTICS == full OPTICS partition (#46)") {
+	// Well-separated blobs, each point replicated 1..4 times to create exact duplicates.
+	const auto base = optics::testdata::make_blobs<double, 2>( 4, 60, 50.0, 1.0, 4242u );
+	std::vector<std::array<double, 2>> full;
+	std::mt19937 rng( 7 );
+	for ( const auto& p : base ) {
+		const int reps = 1 + static_cast<int>( rng() % 4 );
+		for ( int r = 0; r < reps; ++r ) { full.push_back( p ); }
+	}
+	const std::size_t n = full.size();
+	const std::size_t min_pts = 8;
+	const double eps = 12.0, thr = 6.0;
+
+	// Explicit eps + threshold so the dedup and full paths share the SAME parameters.
+	const auto full_cl = optics::cluster_threshold( full, min_pts, thr, eps, optics::NeighborMode::OnDemand, 0, false );
+	const auto dedup_cl = optics::cluster_threshold( full, min_pts, thr, eps, optics::NeighborMode::OnDemand, 0, true );
+	CHECK( rand_index( labels_from_clusters( n, full_cl ), labels_from_clusters( n, dedup_cl ) ) > 0.99 );
+
+	// Every original point is labeled exactly once by the dedup path.
+	std::size_t covered = 0;
+	for ( const auto& c : dedup_cl ) { covered += c.size(); }
+	CHECK( covered == n );
+
+	// Xi path: same partition equivalence (exercises the weighted steep-area spans).
+	const auto full_xi = optics::extract_xi( full, min_pts, 0.05, eps, optics::NeighborMode::OnDemand, 0, 0.0, 0, false );
+	const auto dedup_xi = optics::extract_xi( full, min_pts, 0.05, eps, optics::NeighborMode::OnDemand, 0, 0.0, 0, true );
+	CHECK( rand_index( labels_from_clusters( n, full_xi ), labels_from_clusters( n, dedup_xi ) ) > 0.99 );
+}
+
+
+TEST_CASE("weighted OPTICS: validation + empty/unit weights leave results unchanged (#46)") {
+	const auto pts = optics::testdata::make_blobs<double, 2>( 3, 40, 40.0, 1.0, 9u );
+	const std::size_t n = pts.size();
+
+	// Size mismatch throws.
+	const std::vector<std::size_t> bad( n - 1, 1 );
+	CHECK_THROWS_AS(
+		optics::compute_reachability_dists( pts, 5, 8.0, optics::NeighborMode::OnDemand, 0, optics::CoreDistMode::Scan, 0, bad ),
+		std::invalid_argument );
+
+	// Empty weights => byte-identical ordering to the default call.
+	const auto base = optics::compute_reachability_dists( pts, 5, 8.0, optics::NeighborMode::OnDemand, 0, optics::CoreDistMode::Scan );
+	const auto same = optics::compute_reachability_dists( pts, 5, 8.0, optics::NeighborMode::OnDemand, 0, optics::CoreDistMode::Scan, 0, std::vector<std::size_t>{} );
+	CHECK( ( base == same ) );
+
+	// All-ones weights => same partition as unweighted.
+	const std::vector<std::size_t> ones( n, 1 );
+	const auto w1 = optics::compute_reachability_dists( pts, 5, 8.0, optics::NeighborMode::OnDemand, 0, optics::CoreDistMode::Scan, 0, ones );
+	const auto lb = labels_from_clusters( n, optics::get_cluster_indices( base, 4.0 ) );
+	const auto lw = labels_from_clusters( n, optics::get_cluster_indices( w1, 4.0 ) );
+	CHECK( rand_index( lb, lw ) > 0.999 );
+}
+
+
+TEST_CASE("weighted eps: total-weight estimate matches the expanded full cloud (#46)") {
+	const auto unique = optics::testdata::make_blobs<double, 2>( 4, 30, 40.0, 1.0, 13u );
+	// Give each unique point a weight and build the explicitly-expanded full cloud.
+	std::vector<std::size_t> weights( unique.size() );
+	std::vector<std::array<double, 2>> expanded;
+	for ( std::size_t i = 0; i < unique.size(); ++i ) {
+		weights[i] = 1 + ( i % 3 );
+		for ( std::size_t r = 0; r < weights[i]; ++r ) { expanded.push_back( unique[i] ); }
+	}
+	const double e_weighted = optics::epsilon_estimation( unique, 5, weights );
+	const double e_full = optics::epsilon_estimation( expanded, 5 );
+	CHECK( e_weighted == doctest::Approx( e_full ) );  // identical box geometry, identical total count
+}
+
+
+TEST_CASE("Xi weighted spans: all-ones position weights are identical to unweighted (#46)") {
+	// The prefix-sum threading must not perturb the extractor when every weight is 1
+	// (this is what keeps the pinned chi_test_* green). Same hand-crafted ordering as the
+	// convenience test, plus a second valley shape.
+	const std::vector<optics::reachability_dist> reach_a = {
+		{ 1, 10.0 }, { 2, 9.0 }, { 3, 9.0 }, { 4, 5.0 }, { 5, 5.49 }, { 6, 5.0 },
+		{ 7, 6.5 }, { 8, 3.0 }, { 9, 2.9 }, { 10, 2.8 }, { 11, 10.0 }, { 12, 12.0 } };
+	const std::vector<optics::reachability_dist> reach_b = {
+		{ 1, 10.0 }, { 2, 10.0 }, { 3, 2.0 }, { 4, 2.0 }, { 5, 2.0 }, { 6, 10.0 }, { 7, 10.0 } };
+
+	for ( const auto* reach : { &reach_a, &reach_b } ) {
+		for ( const std::size_t mp : { 2u, 4u } ) {
+			const std::vector<std::size_t> ones( reach->size(), 1 );
+			const auto unweighted = optics::get_chi_clusters_flat( *reach, 0.1, mp );
+			const auto weighted_ones = optics::get_chi_clusters_flat( *reach, 0.1, mp, 0.0, 0, ones );
+			CHECK( ( unweighted == weighted_ones ) );
+		}
+	}
+}
+
+
+TEST_CASE("weighted sOPTICS: empty weights unchanged; dedup agrees with full (#46)") {
+	auto pts = optics::testdata::make_blobs<double, 3>( 4, 80, 30.0, 1.0, 555u );
+	for ( auto& p : pts ) {  // cosine metric: normalize onto the unit sphere
+		const double nrm = std::sqrt( p[0] * p[0] + p[1] * p[1] + p[2] * p[2] );
+		if ( nrm > 0.0 ) { for ( auto& c : p ) { c /= nrm; } }
+	}
+	std::vector<std::array<double, 3>> full;
+	std::mt19937 rng( 3 );
+	for ( const auto& p : pts ) {
+		const int reps = 1 + static_cast<int>( rng() % 3 );
+		for ( int r = 0; r < reps; ++r ) { full.push_back( p ); }
+	}
+	const std::size_t n = full.size();
+	const std::size_t min_pts = 6;
+	const double eps = 0.3;
+
+	// Empty weights => byte-identical to the unweighted sOPTICS call.
+	const auto a = optics::compute_soptics_reachability_dists( full, min_pts, eps, 256u, 16u, std::size_t{ 32 }, 7u );
+	const auto a2 = optics::compute_soptics_reachability_dists( full, min_pts, eps, 256u, 16u, std::size_t{ 32 }, 7u, 0u, optics::Metric::Cosine, 0.0, std::vector<std::size_t>{} );
+	CHECK( ( a == a2 ) );
+
+	// Weighted dedup vs full: the flat-cut partitions agree (approximate => statistical).
+	const auto d = optics::deduplicate( full );
+	const auto wreach = optics::compute_soptics_reachability_dists(
+		d.unique_points, min_pts, eps, 256u, 16u, std::size_t{ 32 }, 7u, 0u, optics::Metric::Cosine, 0.0, d.weights );
+	const double thr = 0.5 * eps;
+	const auto full_lbl = labels_from_clusters( n, optics::get_cluster_indices( a, thr ) );
+	const auto exp = optics::expand_clusters_to_original( optics::get_cluster_indices( wreach, thr ), d.unique_of_original );
+	const auto dedup_lbl = labels_from_clusters( n, exp );
+	CHECK( rand_index( full_lbl, dedup_lbl ) > 0.85 );
+}
+
+
 #ifdef OPTICS_ENABLE_BOOST_RTREE
 // Only built when the optional Boost backend is enabled. Verifies that the Boost
 // R*-tree backend is interchangeable with nanoflann (issue #27): identical
