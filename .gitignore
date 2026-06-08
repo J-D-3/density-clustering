@@ -66,10 +66,13 @@ optics_perf.csv
 colors_in.csv
 colors_clustered.csv
 
-# Generated datasets (reproducible via tools/datasets.py) and example outputs
+# Generated datasets (reproducible via tools/datasets.py / gen_dataset.py) and example outputs
 /data/
 *_clustered.csv
 *_labels.csv
+
+# Benchmark-matrix results (reproducible via tools/run_matrix.py; not a committed artifact)
+/results/
 
 #Output
 *.ppm

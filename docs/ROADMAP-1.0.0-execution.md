@@ -101,11 +101,19 @@ Update it to:
    and non-spherical shapes (moons/spiral) as thin manifolds embedded by a random orthonormal rotation
    (so they stay recoverable in any d and aren't axis-aligned). Sanity-checked: sklearn-HDBSCAN ARI
    0.78–0.95 vs truth across regimes at d=2..16. Reuses `datasets.write_csv`.
-2. **`optics_matrix` exe** — one binary with explicit `Dim` instantiations for
-   {1,2,3,4,6,8,12,16,32,64,128} dispatched by a runtime `switch(dim)` (watch binary size).
-3. **`tools/run_matrix.py`** — expand tier specs → cells; feasibility-gate + timeout (§3b: predict
-   cost, cap, **log every skip** — never silently truncate); invoke C++ harnesses + adapters; append
-   one tidy long-format CSV; **checkpoint / resume**; record full provenance (§5).
+2. **✅ DONE — `optics_matrix` exe** (`test/Benchmark/optics_matrix.cpp`) — one binary running
+   *one* algorithm (`optics` | `soptics` | `hdbscan` | `shdbscan`) per call on a CSV cloud, with
+   explicit `Dim` instantiations for {1,2,3,4,6,8,12,16,32,64,128} via a runtime `switch(dim)`. Emits
+   labels (input order) + a `RESULT eps=… ordering_ms=… n_clusters=… noise=…` line; generalizes
+   `quality_compare.cpp` + `hdbscan_compare.cpp`. The orchestrator's per-cell executor.
+3. **✅ DONE — `tools/run_matrix.py`** — expands a tier spec → cells, generates each dataset once,
+   runs every applicable engine (ours via `optics_matrix`; sklearn OPTICS/HDBSCAN/DBSCAN/KMeans;
+   dbscan-R probed), scores ARI/NMI/Rand vs truth, appends one **tidy long-format** row per
+   (cell, engine, config, rep, measure); **checkpoint/resume** (skips recorded keys), **feasibility
+   gating** (predicted-cost cap, logged skips — never silent), full provenance (commit/threads/ts).
+   **Phase-1 pilot runs end-to-end** (4 cells × 7 engines): ours-OPTICS == sklearn-OPTICS quality but
+   100–1000× faster; ours-HDBSCAN == sklearn-HDBSCAN exactly; cosine methods strong only on angular
+   data (expected). `results/` is gitignored.
 4. **`tools/analyze_matrix.py`** — D1–D5 decision tables, Pareto fronts, speedup-vs-sklearn figures.
 5. **Adapters + Docker repro env** — sklearn ✓, dbscan-R ✓, ELKI (new), NinhPham/sDbscan (new); all
    containerized so the "single reference" reproduces off the dev box (R-sandbox / Java / build
