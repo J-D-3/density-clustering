@@ -44,11 +44,15 @@
 #include "backend.hpp"
 #include "detail/math.hpp"
 #include "detail/thread_pool.hpp"
+#include "detail/random_features.hpp"   // Metric / SopticsProjection enums + kernel embedding (sHDBSCAN)
+#include "detail/random_projection.hpp" // CEOs approximate neighbor graph (sHDBSCAN)
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
+#include <numeric>
 #include <optional>
 #include <stdexcept>
 #include <unordered_map>
@@ -166,6 +170,103 @@ std::vector<MstEdge> mutual_reachability_mst( const std::vector<std::array<T, Di
 			const double d = detail::dist( points[u], points[v] );
 			const double mreach = std::max( std::max( core_u, core[v] ), d );
 			if ( mreach < best[v] ) { best[v] = mreach; parent[v] = u; }
+		}
+	}
+	return mst;
+}
+
+
+//=== Steps 1+3, approximate (sHDBSCAN): core distance + MST from a sparse graph ===
+
+// k-th smallest of a list of squared distances (self at 0 included), as a real distance; nullopt
+// if fewer than k entries. A small standalone copy of optics.hpp's compute_core_dist_from_sq so
+// hdbscan.hpp need not pull in the whole OPTICS header for the approximate path.
+inline std::optional<double> kth_dist_from_sq( const std::vector<double>& sq, std::size_t k ) {
+	if ( sq.size() < k || k == 0 ) { return std::nullopt; }
+	std::vector<double> scratch( sq );
+	std::nth_element( scratch.begin(), scratch.begin() + ( k - 1 ), scratch.end() );
+	return std::sqrt( scratch[k - 1] );
+}
+
+// Approximate core distances from the CEOs candidate squared distances (parallel to the neighbor
+// lists). core_k(i) = the min_samples-th nearest among i's candidates. If a point has fewer than
+// min_samples candidates (the approximation found too few), fall back to its farthest candidate --
+// a conservative over-estimate that makes such a point connect late (and likely become noise).
+inline std::vector<double> approx_core_distances( const std::vector<std::vector<double>>& neighbor_sq,
+												  std::size_t min_samples ) {
+	const std::size_t n = neighbor_sq.size();
+	std::vector<double> core( n, 0.0 );
+	for ( std::size_t i = 0; i < n; ++i ) {
+		const auto cd = kth_dist_from_sq( neighbor_sq[i], min_samples );
+		if ( cd.has_value() ) {
+			core[i] = *cd;
+		} else {
+			double mx = 0.0;
+			for ( const double s : neighbor_sq[i] ) { mx = std::max( mx, s ); }
+			core[i] = std::sqrt( mx );
+		}
+	}
+	return core;
+}
+
+// Approximate mutual-reachability MST built from the sparse, symmetric CEOs neighbor graph instead
+// of the complete graph (sHDBSCAN). Each candidate pair (i,j) contributes a mutual-reachability
+// edge max(core(i),core(j),d(i,j)); Kruskal over those sparse edges builds the MST. The CEOs graph
+// can be disconnected (it only ever lists a point's approximate neighbours), so any leftover
+// components are joined to point 0's tree with a weight strictly larger than every real edge --
+// those merges then sit at the very top of the hierarchy, exactly where well-separated clusters (and
+// tiny stray components, which fall below min_cluster_size and become noise) ought to split.
+//
+// `neighbors`/`neighbor_sq` are the symmetric CEOs lists (each includes the point itself); because
+// the relation is symmetric every undirected edge is seen from its lower-index endpoint, so taking
+// only j > i lists each edge exactly once.
+inline std::vector<MstEdge> approx_mutual_reachability_mst(
+		const std::vector<std::vector<std::size_t>>& neighbors,
+		const std::vector<std::vector<double>>& neighbor_sq, const std::vector<double>& core,
+		std::size_t n ) {
+	std::vector<MstEdge> mst;
+	if ( n < 2 ) { return mst; }
+
+	// Gather candidate mutual-reachability edges (each undirected pair once, from the lower index).
+	std::vector<MstEdge> edges;
+	for ( std::size_t i = 0; i < n; ++i ) {
+		const auto& nb = neighbors[i];
+		const auto& sq = neighbor_sq[i];
+		for ( std::size_t t = 0; t < nb.size(); ++t ) {
+			const std::size_t j = nb[t];
+			if ( j <= i ) { continue; }  // skip self and the mirror copy on j's list
+			const double d = std::sqrt( sq[t] );
+			const double w = std::max( std::max( core[i], core[j] ), d );
+			edges.push_back( { i, j, w } );
+		}
+	}
+	std::sort( edges.begin(), edges.end(), []( const MstEdge& a, const MstEdge& b ) { return a.weight < b.weight; } );
+
+	// Kruskal with a plain union-find over the n points.
+	std::vector<std::size_t> uf( n );
+	std::iota( uf.begin(), uf.end(), std::size_t( 0 ) );
+	auto find = [&]( std::size_t x ) {
+		while ( uf[x] != x ) { uf[x] = uf[uf[x]]; x = uf[x]; }  // path halving
+		return x;
+	};
+
+	mst.reserve( n - 1 );
+	double max_w = 0.0;
+	for ( const auto& e : edges ) {
+		const std::size_t ra = find( e.u );
+		const std::size_t rb = find( e.v );
+		if ( ra != rb ) { uf[ra] = rb; mst.push_back( e ); max_w = std::max( max_w, e.weight ); }
+	}
+
+	// Connect any remaining components to point 0's tree above all real edges.
+	if ( mst.size() + 1 < n ) {
+		const double connect_w = ( max_w > 0.0 ? 2.0 * max_w : 1.0 ) + 1.0;
+		const std::size_t anchor = find( 0 );
+		for ( std::size_t i = 1; i < n; ++i ) {
+			if ( find( i ) != find( anchor ) ) {
+				uf[find( i )] = find( anchor );
+				mst.push_back( { std::size_t( 0 ), i, connect_w } );
+			}
 		}
 	}
 	return mst;
@@ -492,6 +593,28 @@ inline void do_labelling( const std::vector<CondensedEdge>& tree, const std::vec
 	}
 }
 
+
+//=== The MST-agnostic extractor (steps 4-6 packaged) ========================
+
+// Turn any mutual-reachability MST over n points into a flat HDBSCAN* labelling: hierarchy ->
+// condense -> stability -> EOM/leaf selection -> labels + probabilities. This is the part that
+// does NOT care how the MST was built, so it is shared by exact hdbscan() (dense Prim) and the
+// approximate shdbscan() (CEOs sparse graph). The caller has already noise-handled n < min_cluster_size.
+inline HdbscanResult extract_from_mst( const std::vector<MstEdge>& mst, std::size_t n,
+									   std::size_t min_cluster_size, ClusterSelectionMethod method,
+									   bool allow_single_cluster ) {
+	HdbscanResult result;
+	const auto linkage = mst_to_linkage( mst, n );
+	const auto condensed = condense_tree( linkage, n, min_cluster_size );
+	const auto stability = compute_stabilities( condensed, n );
+	const auto selected = ( method == ClusterSelectionMethod::Leaf )
+		? select_leaf( condensed, stability, n, allow_single_cluster )
+		: select_eom( condensed, stability, n, allow_single_cluster );
+	do_labelling( condensed, selected, n, n, result.labels, result.probabilities );
+	result.n_clusters = selected.size();
+	return result;
+}
+
 }  // namespace detail
 
 
@@ -537,17 +660,93 @@ HdbscanResult hdbscan( const std::vector<std::array<T, Dim>>& points, std::size_
 
 	const auto core = detail::hdbscan_core_distances<T, Dim, Backend>( points, min_samples, n_threads );
 	const auto mst = detail::mutual_reachability_mst( points, core );
-	const auto linkage = detail::mst_to_linkage( mst, n );
-	const auto condensed = detail::condense_tree( linkage, n, min_cluster_size );
-	const auto stability = detail::compute_stabilities( condensed, n );
+	return detail::extract_from_mst( mst, n, min_cluster_size, method, allow_single_cluster );
+}
 
-	const auto selected = ( method == ClusterSelectionMethod::Leaf )
-		? detail::select_leaf( condensed, stability, n, allow_single_cluster )
-		: detail::select_eom( condensed, stability, n, allow_single_cluster );
 
-	detail::do_labelling( condensed, selected, n, n, result.labels, result.probabilities );
-	result.n_clusters = selected.size();
-	return result;
+//=== sHDBSCAN: scalable approximate HDBSCAN* via random projections ==========
+
+// sHDBSCAN replaces the exact O(n^2) dense-Prim MST with an approximate mutual-reachability MST
+// built from the same CEOs random-projection neighbor graph sOPTICS uses (see
+// detail/random_projection.hpp), then runs the identical condense/stability/extract pipeline. It is
+// to hdbscan() what sOPTICS is to OPTICS: a scalable, approximate variant whose output is randomized
+// but deterministic in `seed` -- validate it by statistical agreement (Rand/NMI) with exact
+// hdbscan(), not bit-identical labels.
+//
+// Metric is COSINE: points are L2-normalized onto the unit sphere internally, where Euclidean
+// distance (what the mutual-reachability MST uses) is monotone in cosine distance -- so the
+// clustering reflects cosine similarity, NOT raw Euclidean distance on the original data. L2 / L1
+// embed into random Fourier features first (the same path as compute_soptics_reachability_dists),
+// so the clustering then tracks Euclidean / Manhattan distance on the original data.
+//
+//   min_cluster_size / min_samples / method / allow_single_cluster : as in hdbscan(). min_samples
+//                   also drives the CEOs candidate density (m defaults to 2*min_samples per vector).
+//   epsilon       : generating distance on the unit sphere, in [0,2]; <= 0 => 2.0 (keep every CEOs
+//                   candidate -- the pool is bounded regardless).
+//   n_projections, k, m, seed : CEOs tunables (see compute_soptics_reachability_dists).
+//   n_threads     : workers for the projection / candidate phases.
+//   metric, kernel_scale, projection : as in compute_soptics_reachability_dists.
+template <class T, std::size_t Dim>
+HdbscanResult shdbscan( const std::vector<std::array<T, Dim>>& points, std::size_t min_cluster_size,
+						std::size_t min_samples = 0, double epsilon = -1.0,
+						unsigned n_projections = 1024, unsigned k = 0, std::size_t m = 0,
+						unsigned seed = 42, unsigned n_threads = 0,
+						ClusterSelectionMethod method = ClusterSelectionMethod::EOM,
+						bool allow_single_cluster = false, Metric metric = Metric::Cosine,
+						double kernel_scale = 0.0, SopticsProjection projection = SopticsProjection::Gaussian ) {
+	static_assert( std::is_floating_point_v<T>, "shdbscan: coordinate type 'T' must be float or double" );
+	static_assert( Dim >= 1, "shdbscan: dimension must be >= 1" );
+
+	if ( min_cluster_size < 2 ) { throw std::invalid_argument( "shdbscan: min_cluster_size must be >= 2" ); }
+	if ( min_samples == 0 ) { min_samples = min_cluster_size; }
+
+	const std::size_t n = points.size();
+	HdbscanResult result;
+	result.labels.assign( n, -1 );
+	result.probabilities.assign( n, 0.0 );
+	if ( n < min_cluster_size ) { return result; }
+
+	// Non-cosine metric: embed into random Fourier features (cosine-on-features ~ target kernel),
+	// then recurse on the cosine pipeline. Indices line up 1:1, so labels map straight back.
+	if ( metric != Metric::Cosine ) {
+		constexpr std::size_t FeatDim = 256;
+		const double sigma = ( kernel_scale > 0.0 ) ? kernel_scale : detail::auto_kernel_scale( points, metric );
+		const auto feats = detail::embed_random_features<FeatDim, T, Dim>( points, metric, sigma, seed, n_threads );
+		return shdbscan<double, FeatDim>( feats, min_cluster_size, min_samples, epsilon, n_projections, k, m,
+										  seed, n_threads, method, allow_single_cluster, Metric::Cosine, 0.0, projection );
+	}
+
+	// L2-normalize onto the unit sphere (cosine metric); the origin has no direction, leave it.
+	std::vector<std::array<T, Dim>> unit( n );
+	for ( std::size_t i = 0; i < n; ++i ) {
+		double nrm_sq = 0.0;
+		for ( std::size_t c = 0; c < Dim; ++c ) { const double v = static_cast<double>( points[i][c] ); nrm_sq += v * v; }
+		const double nrm = std::sqrt( nrm_sq );
+		if ( nrm > 0.0 ) {
+			for ( std::size_t c = 0; c < Dim; ++c ) { unit[i][c] = static_cast<T>( static_cast<double>( points[i][c] ) / nrm ); }
+		} else {
+			unit[i] = points[i];
+		}
+	}
+
+	const double eps = ( epsilon <= 0.0 ) ? 2.0 : epsilon;
+	detail::CeosParams params;
+	params.n_projections = n_projections;
+	params.k = k;
+	params.m = m;
+	params.seed = seed;
+	params.n_threads = n_threads;
+	params.projection = ( projection == SopticsProjection::Structured )
+		? detail::CeosParams::Projection::Structured
+		: detail::CeosParams::Projection::Gaussian;
+
+	// CEOs candidate graph (symmetric, self-inclusive) + each candidate's squared distance.
+	std::vector<std::vector<double>> neighbor_sq;
+	const auto neighbors = detail::ceos_neighbors( unit, eps, min_samples, params, &neighbor_sq );
+
+	const auto core = detail::approx_core_distances( neighbor_sq, min_samples );
+	const auto mst = detail::approx_mutual_reachability_mst( neighbors, neighbor_sq, core, n );
+	return detail::extract_from_mst( mst, n, min_cluster_size, method, allow_single_cluster );
 }
 
 }  // namespace optics

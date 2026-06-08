@@ -22,6 +22,17 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
   small/medium `n`; a sub-quadratic MST (Borůvka, or the sOPTICS/CEOs graph → "sHDBSCAN") is queued as
   a #52 follow-up. Reimplemented from the papers (Campello/Moulavi/Sander 2013; McInnes & Healy 2017),
   no third-party code. `min_samples` is self-inclusive (matches `sklearn.cluster.HDBSCAN`).
+- **sHDBSCAN** (#52, the first follow-up): `optics::shdbscan(...)` is a scalable, **approximate**
+  HDBSCAN\* that swaps the exact dense-Prim MST for an approximate mutual-reachability MST built from
+  the same **CEOs random-projection neighbor graph** sOPTICS uses (Kruskal over the sparse candidate
+  edges; disconnected components are joined above all real edges, so well-separated clusters split at
+  the top). It then runs the **identical** condense/stability/extraction pipeline — the new
+  `detail::extract_from_mst` is shared verbatim with exact `hdbscan()`, the concrete payoff of keeping
+  steps 4–6 MST-agnostic. Metric is **cosine** (points L2-normalized onto the unit sphere); `L2`/`L1`
+  go through the same random-Fourier-feature embedding as `compute_soptics_reachability_dists`. Output
+  is randomized but **deterministic in `seed`**; on angular 3-D blobs it matched exact `hdbscan()`
+  labelling (Rand ≈ 1.0) and recovered the planted partition (Rand ≈ 0.99). This is the "sHDBSCAN"
+  combine-path the #52 plan anticipated; a dual-tree-Borůvka exact fast MST remains future work.
 - **Structured (FHT spinner) projections for sOPTICS** (#58, opt-in): `SopticsProjection::Structured`
   replaces the Gaussian CEOs projection (`O(D·Dim)` per point) with random spinners
   `x → H D₃ H D₂ H D₁ x` (sign-flip + fast Walsh-Hadamard transform, `O(D·log Dim)`; new
