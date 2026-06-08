@@ -1935,6 +1935,76 @@ TEST_CASE("shdbscan: edge cases and the L2 (random-features) metric path") {
 }
 
 
+TEST_CASE("hdbscan: weighted all-ones == unweighted; weighted-on-dedup == unweighted-on-full (#46)") {
+	const std::vector<std::array<double, 2>> centers = { { 0, 0 }, { 100, 0 }, { 50, 100 } };
+	const auto pts = optics::testdata::gaussian_blobs<double, 2>( centers, 40, 1.5 );
+	const std::size_t n0 = pts.size();
+
+	// (1) All-ones explicit weights reproduce the unweighted clustering bit-for-bit.
+	const auto plain = optics::hdbscan( pts, 5 );
+	const std::vector<std::size_t> ones( n0, 1 );
+	const auto wones = optics::hdbscan( pts, 5, 0, optics::ClusterSelectionMethod::EOM, false, 0, true, ones );
+	CHECK( ( plain.labels == wones.labels ) );
+	CHECK( ( plain.probabilities == wones.probabilities ) );
+
+	// (2) Replicate points to create exact duplicates (reps < min_samples, so no zero-distance
+	// core collapse); weighted-on-dedup must give the same partition as unweighted-on-full.
+	std::vector<std::array<double, 2>> full;
+	std::mt19937 rng( 7 );
+	for ( const auto& p : pts ) { const int reps = 1 + static_cast<int>( rng() % 3 ); for ( int r = 0; r < reps; ++r ) { full.push_back( p ); } }
+	const std::size_t n = full.size();
+	REQUIRE( n > n0 );  // duplicates actually present
+
+	const auto on_full = optics::hdbscan( full, 10, 10, optics::ClusterSelectionMethod::EOM, false, 0, false );
+	const auto on_dedup = optics::hdbscan( full, 10, 10, optics::ClusterSelectionMethod::EOM, false, 0, true );
+	REQUIRE( on_full.labels.size() == n );
+	REQUIRE( on_dedup.labels.size() == n );
+	CHECK( rand_index( to_ll( on_full.labels ), to_ll( on_dedup.labels ) ) > 0.95 );
+
+	// Size-mismatched explicit weights are rejected.
+	CHECK_THROWS_AS( optics::hdbscan( pts, 5, 0, optics::ClusterSelectionMethod::EOM, false, 0, true,
+									  std::vector<std::size_t>{ 1, 2, 3 } ), std::invalid_argument );
+}
+
+
+TEST_CASE("shdbscan: weighted all-ones == unweighted; dedup tracks the full cloud (#46)") {
+	auto pts = optics::testdata::make_blobs<double, 3>( 5, 100, 30.0, 1.0, 321u );
+	for ( auto& p : pts ) {
+		const double nrm = std::sqrt( p[0] * p[0] + p[1] * p[1] + p[2] * p[2] );
+		if ( nrm > 0.0 ) { for ( auto& c : p ) { c /= nrm; } }
+	}
+	const std::size_t n0 = pts.size();
+
+	// All-ones weights leave the approximate clustering unchanged (same seed => same CEOs graph).
+	const auto base = optics::shdbscan( pts, 20, 10, -1.0, 512u, 20u, std::size_t{ 40 }, 7u, 0u,
+										optics::ClusterSelectionMethod::EOM, false, optics::Metric::Cosine, 0.0,
+										optics::SopticsProjection::Gaussian, false );
+	const std::vector<std::size_t> ones( n0, 1 );
+	const auto wones = optics::shdbscan( pts, 20, 10, -1.0, 512u, 20u, std::size_t{ 40 }, 7u, 0u,
+										 optics::ClusterSelectionMethod::EOM, false, optics::Metric::Cosine, 0.0,
+										 optics::SopticsProjection::Gaussian, false, ones );
+	CHECK( ( base.labels == wones.labels ) );
+
+	// Replicate to create duplicates; dedup (default) should track the full-cloud run.
+	std::vector<std::array<double, 3>> full;
+	std::mt19937 rng( 7 );
+	for ( const auto& p : pts ) { const int reps = 1 + static_cast<int>( rng() % 3 ); for ( int r = 0; r < reps; ++r ) { full.push_back( p ); } }
+	const std::size_t n = full.size();
+	REQUIRE( n > n0 );
+	const auto on_full = optics::shdbscan( full, 20, 10, -1.0, 512u, 20u, std::size_t{ 40 }, 7u, 0u,
+										   optics::ClusterSelectionMethod::EOM, false, optics::Metric::Cosine, 0.0,
+										   optics::SopticsProjection::Gaussian, false );
+	const auto on_dedup = optics::shdbscan( full, 20, 10, -1.0, 512u, 20u, std::size_t{ 40 }, 7u );  // dedup default
+	REQUIRE( on_dedup.labels.size() == n );
+	CHECK( rand_index( to_ll( on_full.labels ), to_ll( on_dedup.labels ) ) > 0.85 );
+
+	CHECK_THROWS_AS( optics::shdbscan( pts, 20, 10, -1.0, 512u, 20u, std::size_t{ 40 }, 7u, 0u,
+									   optics::ClusterSelectionMethod::EOM, false, optics::Metric::Cosine, 0.0,
+									   optics::SopticsProjection::Gaussian, true, std::vector<std::size_t>{ 1, 2, 3 } ),
+					 std::invalid_argument );
+}
+
+
 #ifdef OPTICS_ENABLE_BOOST_RTREE
 // Only built when the optional Boost backend is enabled. Verifies that the Boost
 // R*-tree backend is interchangeable with nanoflann (issue #27): identical
