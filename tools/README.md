@@ -36,6 +36,10 @@ and `cluster_csv` reads them).
 | `hdbscan_benchmark.py` | Cross-check our HDBSCAN\* + sHDBSCAN against `sklearn.cluster.HDBSCAN` and ground truth (ARI / NMI / Rand) plus a direct **ours-vs-sklearn label-agreement** column (the correctness signal for #52); needs the `hdbscan_compare` harness. `min_samples` is self-inclusive in both and passed identically. |
 | `fetch_datasets.py` | Download Franti's clustering benchmark "shape sets" (Aggregation, Compound, spiral, R15, jain, flame, D31) into `data/franti/` as coords + ground-truth CSVs — third-party data with published results (please cite Franti et al.). |
 | `run_dbscan_r.R` | Run mhahsler/dbscan's OPTICS+Xi on a coords CSV → predicted labels + timing (invoked by `quality_benchmark.py`; needs R + `dbscan`). |
+| `gen_dataset.py` | **(matrix)** Parametrized generator: `(n, d, k, density, noise, shape, seed)` → coords + truth CSV. Dimension-stable separation-ratio density (dense/sparse/mixed), d-D blobs, and non-spherical shapes (moons/spiral) embedded by a random rotation. |
+| `run_matrix.py` | **(matrix)** Orchestrator: expand a tier → cells, generate each once, run every engine on the same CSV, score ARI/NMI/Rand, append a tidy long-format CSV. Checkpoint/resume, feasibility-gated, full provenance. Needs the `optics_matrix` harness. |
+| `correctness_gate.py` | **(matrix)** Pre-flight: assert every engine recovers clean, well-separated clusters (ARI≈1) before any timing — catches a broken config. Exits non-zero on failure (CI/run gate). |
+| `analyze_matrix.py` | **(matrix)** Turn the tidy CSV into the D1–D5 decision tables, the speedup-vs-sklearn-OPTICS table, and a quality table (Markdown); honestly flags decisions that still need an unswept axis. |
 
 ```sh
 cmake --build --preset msvc --target optics_quality_compare
@@ -46,6 +50,26 @@ python tools/quality_benchmark.py --exe build/test/Release/optics_quality_compar
 Note: **sOPTICS is a cosine method** — it scores well on the `cos-blobs-*` (direction-based)
 rows and lower on the Euclidean 2-D toys; that is the metric, not a defect. `sk-OPTICS` uses
 Xi extraction, which is parameter-sensitive (so it can score low at the default `xi`).
+
+## The 1.0.0 benchmark matrix (#59)
+
+`gen_dataset.py` → `run_matrix.py` → `analyze_matrix.py` are the consolidated reference study
+(design: [`../docs/ROADMAP-1.0.0-benchmark-matrix.md`](../docs/ROADMAP-1.0.0-benchmark-matrix.md);
+execution: [`../docs/ROADMAP-1.0.0-execution.md`](../docs/ROADMAP-1.0.0-execution.md)). The C++
+per-cell executor is `optics_matrix` (one algorithm per call: `optics`/`soptics`/`hdbscan`/`shdbscan`,
+dim spine {1..128}). Every engine reads the *same* generated CSV — that shared input is what makes the
+comparison fair.
+
+```sh
+cmake --build --preset msvc --target optics_matrix
+python tools/correctness_gate.py                                   # pre-flight: every engine recovers clean blobs
+python tools/run_matrix.py --tier pilot --out results/matrix.csv   # add --resume to continue a killed run
+python tools/analyze_matrix.py results/matrix.csv --out results/report.md
+```
+
+Tiers: `pilot` (tiny end-to-end smoke), `scaling` (n-spine), `dim` (d-spine) — `--list-tiers` to
+see cell counts. ELKI / NinhPham-sDbscan are **deferred past 1.0.0** to a Docker repro env (see
+below). `results/` and `data/` are gitignored (reproducible from these scripts).
 
 ## Comparing against mhahsler/dbscan (R)
 

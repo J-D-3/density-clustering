@@ -114,12 +114,18 @@ Update it to:
    **Phase-1 pilot runs end-to-end** (4 cells × 7 engines): ours-OPTICS == sklearn-OPTICS quality but
    100–1000× faster; ours-HDBSCAN == sklearn-HDBSCAN exactly; cosine methods strong only on angular
    data (expected). `results/` is gitignored.
-4. **`tools/analyze_matrix.py`** — D1–D5 decision tables, Pareto fronts, speedup-vs-sklearn figures.
-5. **Adapters + Docker repro env** — sklearn ✓, dbscan-R ✓, ELKI (new), NinhPham/sDbscan (new); all
-   containerized so the "single reference" reproduces off the dev box (R-sandbox / Java / build
-   fragility is the main operational risk).
-6. **Correctness gate** — before any timing, ARI ≈ 1 vs the brute-force reference on clean blobs per
-   small cell, so we never benchmark a broken config.
+4. **✅ DONE — `tools/analyze_matrix.py`** — reads the tidy CSV → Markdown D1–D5 decision tables, the
+   speedup-vs-sklearn-OPTICS table, and a per-cell quality table. Pure stdlib+numpy (no pandas). It is
+   **honest about insufficient data**: a decision needing an unswept axis (D1 backends, D3 mode, D4
+   eps) is reported as "insufficient -- needs <axis>", not guessed. On the pilot it already shows the
+   254×/271× OPTICS speedups and the D2/D5 crossover skeleton.
+5. **Adapters + Docker repro env** — sklearn ✓, dbscan-R ✓ (probed); ELKI + NinhPham/sDbscan **deferred
+   past 1.0.0** into a Docker repro env (R-sandbox / Java / build fragility is the main operational
+   risk). *(Remaining infra item.)*
+6. **✅ DONE — `tools/correctness_gate.py`** — before any timing, asserts every engine recovers clean,
+   well-separated clusters (ARI ≈ 1; Euclidean blobs for exact methods, angular blobs for the cosine
+   methods — metric matched per §9.2). Exits non-zero on failure so it gates a run/CI. Verified: all
+   six engines pass (cosine methods hit ARI 1.00 on angular data).
 
 ### B2 — Run (design §10 phasing)
 
