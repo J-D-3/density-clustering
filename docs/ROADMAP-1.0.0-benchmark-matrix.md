@@ -1,10 +1,13 @@
 # Plan — the 1.0.0 benchmark matrix (single reference study)
 
-**Status:** planned, *not yet executed*. Tracked by **issue #59**. This is the design for one large,
-reproducible study run **once all 1.0.0 features are merged** (sOPTICS #50, non-Euclidean metrics
-#51, HDBSCAN\* #52, HNSW backend #47, the comparison + quality harnesses #53/#54). Its two jobs:
+**Status:** design complete + **amended for HDBSCAN\*/sHDBSCAN (2026-06-08)**, infrastructure
+*not yet built*, study *not yet executed*. Tracked by **issue #59**; execution steps in
+[`ROADMAP-1.0.0-execution.md`](ROADMAP-1.0.0-execution.md) (Part B). All gated features are now merged
+(sOPTICS #50, non-Euclidean metrics #51, HDBSCAN\*/sHDBSCAN #52, HNSW backend #47, the comparison +
+quality harnesses #53/#54); ELKI / NinhPham-sDbscan competitor columns are deferred past 1.0.0 into
+the Docker repro env (§8.4). Its two jobs:
 
-1. **Pick the library's data-dependent defaults**, with evidence — the four decisions in §1.
+1. **Pick the library's data-dependent defaults**, with evidence — the **five** decisions in §1.
 2. Be the project's **single, citable performance reference** against other libraries on the same
    data, on the same machine, at the same parameters.
 
@@ -27,6 +30,7 @@ study can confirm or refute it, rather than fishing for a story afterwards.
 | D2 | **sOPTICS vs exact OPTICS** | `n` × `d` × `density` × `metric` | "sOPTICS when `n ≥ N*(d, density)` **and** the metric is angular/cosine-appropriate; else exact." Find the crossover surface `N*`. |
 | D3 | **Neighbor-acquisition backend & mode per case** (which NN backend + Precompute vs OnDemand) | `density` (avg neighbors) × `n` × `d` × `mode` | "OnDemand when `avg_nbrs·n·8B > mem_budget` **or** cloud is dense; Precompute when sparse and it fits." Confirm the v0.9.1 default flip across the grid; find the avg-nbrs crossover. |
 | D4 | **Epsilon estimator** (uniform vs k-distance-knee) | `density` × `k` (cluster structure) × **quality** (needs ground truth) | "knee is the default (already shipped #57); identify any regime where uniform is better." Quantify the quality gap per regime. |
+| D5 | **HDBSCAN\* vs sHDBSCAN** (exact dense-Prim MST vs CEOs random-projection MST, #52) | `n` × `d` × `density` × `metric` × **quality** | "sHDBSCAN when `n ≥ M*(d, density)` **and** the metric is angular/cosine-appropriate; else exact HDBSCAN\*." Find the crossover `M*` (mirrors D2 for OPTICS/sOPTICS) and the quality cost. |
 
 Stretch outcome: if the rules are clean, expose a tiny `optics::recommend_config(n, d,
 density_hint, metric)` helper (does not exist today — grep confirms) that returns the chosen
@@ -82,13 +86,15 @@ only testable if the comparison is fair).
 | **density** | dense ⇒ O(n²), **OnDemand faster and the only feasible mode at scale** (confirms the v0.9.1 default flip); sparse ⇒ **Precompute faster** (small parallel cache, near-linear); approx backend gives **no** speedup on dense low-d (neighborhood-bound) but helps high-d sparse (search-bound). | Per-regime mode winner + time/memory. **Precompute beating OnDemand on dense refutes the v0.9.1 default.** approx beating exact on dense low-d **refutes** the "neighborhood-bound, not search-bound" claim. | Tier A/B (`mode_compare`, `approx_probe`) |
 | **engine** | ours-OPTICS ≈ dbscan-R at equal eps (within ~2×), both **100–1000× faster than sklearn-OPTICS**; ours sits in **sklearn-DBSCAN's time band** while computing the full ordering+hierarchy. KMeans is always fastest (no neighbor graph) but lower quality on non-spherical/varied-density. ours-HDBSCAN\* quality ≈ sklearn/ELKI HDBSCAN\*; ELKI FastOPTICS ≈ our sOPTICS. | Same-machine ratio tables. ours-OPTICS > 2× slower than dbscan-R at equal eps → **regression flagged**. sklearn-OPTICS within 10× of ours **refutes** the headline speedup. KMeans matching OPTICS quality on Franti **refutes** the "shape/variety advantage". | Tier C/E (`quality_compare`, `quality_benchmark`, `timing_compare`, `timing_images`) |
 | **eps method** (D4) | **knee ≥ uniform** in quality on clustered data, with large gaps at high-k / mixed (cf. R15 0.95 vs 0.43); they **converge on ~uniform-density / single-blob** data. knee ⇒ smaller ε ⇒ smaller neighborhoods ⇒ faster + less memory on dense. | Per-dataset ΔARI = ARI(knee) − ARI(uniform). A regime where uniform wins is a **real finding** (records where to prefer uniform). knee never helping anywhere **refutes** the shipped #57 default. | Tier C (`quality_compare --eps uniform\|knee`) |
-| **metric** | sOPTICS (cosine) matches exact-OPTICS ARI **only on angular/cosine datasets**; on Euclidean layouts it is honestly lower (metric mismatch, not a bug). The known **16-d cosine quality dip** (ARI ≈0.57 vs ~0.82) reproduces; CEOs-param tuning may recover it. | ARI(sOPTICS, cosine) ≈ ARI(exact) within tolerance **and** ARI(sOPTICS, euclidean) lower → established. sOPTICS matching exact on **Euclidean** too **refutes** the metric-mismatch framing (sOPTICS more general than assumed). 16-d dip not reproducing **refutes** the open TODO. | Tier C/D (cosine-blobs vs toys; `soptics_compare`) |
+| **metric** | sOPTICS (cosine) matches exact-OPTICS ARI **only on angular/cosine datasets**; on Euclidean layouts it is honestly lower (metric mismatch, not a bug). The 16-d cosine quality dip (ARI ≈0.57 vs ~0.82) is **addressed by the #58 data-scaled auto-eps** — confirm it no longer reproduces. | ARI(sOPTICS, cosine) ≈ ARI(exact) within tolerance **and** ARI(sOPTICS, euclidean) lower → established. sOPTICS matching exact on **Euclidean** too **refutes** the metric-mismatch framing. 16-d dip *re-appearing* under auto-eps **refutes** the #58 fix. | Tier C/D (cosine-blobs vs toys; `soptics_compare`) |
+| **HDBSCAN\* / sHDBSCAN** (D5) | exact HDBSCAN\* time grows **~O(n²)** (dense-Prim MST), so a crossover `M*` exists above which sHDBSCAN (CEOs MST) wins — mirroring sOPTICS-vs-OPTICS (D2). sHDBSCAN matches exact-HDBSCAN labelling (Rand) **only in the angular regime**. ours-HDBSCAN\* quality ≈ sklearn HDBSCAN (ARI 0.99–1.00 already measured on 13 sets). | Find `M*` on the time × n curve; HDBSCAN\* slope ≈ 2 on dense established, < 1.5 refutes the O(n²) framing. Rand(sHDBSCAN, exact) high on cosine **and** lower on Euclidean → established. ours-HDBSCAN diverging from sklearn beyond tie-break noise **refutes** the parity. | Tier A/D (`hdbscan_compare`, `hdbscan_benchmark.py`) |
 | **min_pts** | Larger min_pts ⇒ larger core distances ⇒ smoother reachability, fewer/larger clusters, larger neighborhoods ⇒ **slower**; quality has a **broad plateau** (robust), so the fixed default (16) is safe. | Time monotonic ↑ in min_pts; ARI unimodal/plateau. A **sharp** quality peak **refutes** "robust default" ⇒ min_pts needs its own per-data guidance. | min_pts spot-check {5,10,16,50} |
 | **dtype** | float vs double: **~identical time** (memory-bandwidth / tree-traversal bound, not FLOP-bound) and ~identical clustering; float **halves memory** (≈2× higher Precompute ceiling). | \|t(float) − t(double)\| within run-to-run noise → established. float markedly faster **refutes** "not FLOP-bound". Cluster labels differing beyond tie-break noise **refutes** numerical equivalence. | dtype spot-check |
 | **threads** | Precompute query phase scales **sub-linearly, saturating ~4–8 threads** (bandwidth-bound; 4 often ≈ all-cores); the sequential ordering loop is an **Amdahl ceiling**, capping end-to-end speedup (e.g. < 3× at 16 threads on dense). OnDemand barely scales. | Speedup-vs-threads curve. ~Linear scaling to 16 **refutes** the Amdahl ceiling (good news, would change the threads default). 4 ≈ all-cores **confirms** the harness's 4-thread default. | Thread-scaling study (2 cells) |
 
 These also seed the **decision rules in §1**: D1 is the `d` row's crossover D\*, D2 the `metric`×`n`×`density`
-crossover, D3 the `density` row's mode winner, D4 the `eps method` row's ΔARI map.
+crossover, D3 the `density` row's mode winner, D4 the `eps method` row's ΔARI map, D5 the
+HDBSCAN\*/sHDBSCAN row's crossover `M*`.
 
 ---
 
@@ -101,17 +107,21 @@ would never finish and would silently look "complete." Instead:
 
 ### 3a. Tiered (fractional) design — sweep one axis at a time around realistic baselines
 - **Tier A — scaling spine.** Pin `d ∈ {3, 16}`, `density=mixed`, `k=⌈d/2⌉`; sweep **n full** ×
-  engines. Yields the O(n)/O(n²) time curves, peak-memory curves, and the Precompute memory wall.
-  *(Extends `scale.cpp` + `mode_compare.cpp`.)*
+  engines (including **exact HDBSCAN\***, whose O(n²) dense-Prim MST is part of the scaling story).
+  Yields the O(n)/O(n²) time curves, peak-memory curves, and the Precompute memory wall.
+  *(Extends `scale.cpp` + `mode_compare.cpp`; HDBSCAN via `hdbscan_compare.cpp`.)*
 - **Tier B — dimensionality spine.** Pin `n ∈ {1e4, 1e5}`, `density=mixed`; sweep **d full** ×
-  backends × (exact/approx/HNSW) with **recall** captured. Yields D1 (backend crossover D\*) and the
-  curse-of-dimensionality picture. *(Extends `benchmark.cpp` + `approx_probe.cpp`.)*
+  backends × (exact/approx/HNSW) with **recall** captured; include exact HDBSCAN\* timing.
+  Yields D1 (backend crossover D\*) and the curse-of-dimensionality picture.
+  *(Extends `benchmark.cpp` + `approx_probe.cpp`.)*
 - **Tier C — cluster-structure & quality.** Pin `n ∈ {3e3, 3e4}`, `d ∈ {2,3,8,16}`; sweep **k ×
   density × eps-method** with **ground truth** → ARI/NMI/Rand. Yields D4 (eps) and the quality
-  baseline vs every engine. *(Extends `quality_compare.cpp` + `quality_benchmark.py`.)*
+  baseline vs every engine (OPTICS/sOPTICS/HDBSCAN\*/sHDBSCAN + sklearn/dbscan-R).
+  *(Extends `quality_compare.cpp` + `quality_benchmark.py` + `hdbscan_benchmark.py`.)*
 - **Tier D — crossover probes.** Targeted 2-D slices where a default flips: sOPTICS-vs-OPTICS over
-  `(n × density)` at d∈{8,16,64} (D2); approx-vs-exact over `(d × eps-permille)` (D1/D3). Dense
-  sampling only near the suspected crossover. *(Extends `soptics_compare.cpp` + `approx_probe.cpp`.)*
+  `(n × density)` at d∈{8,16,64} (D2); **sHDBSCAN-vs-HDBSCAN\*** over `(n × density)` at d∈{8,16,64}
+  (D5, same shape as D2); approx-vs-exact over `(d × eps-permille)` (D1/D3). Dense sampling only near
+  the suspected crossover. *(Extends `soptics_compare.cpp` + `approx_probe.cpp`; D5 via `hdbscan_compare.cpp`.)*
 - **Tier E — real-world.** §6 datasets across all applicable engines (anchors the synthetic story to
   reality and is the public comparison table). *(Extends `timing_images.py` + Franti via `quality_benchmark.py`.)*
 
@@ -142,7 +152,8 @@ completed cells) so it can run over several days.
 |--------|--------|--------|-------|
 | **ours — OPTICS** | nanoflann exact; nanoflann approx (eps‰ ∈ {100,500,1000}); Boost R\*-tree; **HNSW (#47)** | this lib | × mode {Precompute, OnDemand} on the D3 slice |
 | **ours — sOPTICS** | CEOs RP, cosine; vary `n_projections`/`k`/`m` on one slice | this lib | angular metric only — see comparability |
-| **ours — HDBSCAN\*** | #52 condensed-tree extraction | this lib | quality comparison vs sklearn/ELKI HDBSCAN\* |
+| **ours — HDBSCAN\*** | #52 exact dense-Prim mutual-reach MST + condensed-tree extraction | this lib | O(n²) MST ⇒ on the scaling/dim spines; quality vs sklearn/ELKI HDBSCAN\* |
+| **ours — sHDBSCAN** | #52 approximate CEOs random-projection MST, cosine; vary `n_projections`/`k`/`m` | this lib | angular metric only — see comparability; the D5 scalable alternative to exact HDBSCAN\* |
 | **scikit-learn** | OPTICS (xi), DBSCAN, HDBSCAN, **KMeans** (speed-floor baseline) | `quality_benchmark.py` / `timing_images.py` | OPTICS ~O(n²); gate > ~1e4 |
 | **mhahsler/dbscan (R)** | ANN kd-tree OPTICS + Xi | `run_dbscan_r.R` | exact-Euclidean, **same eps** as ours |
 | **ELKI (Java)** | OPTICSXi, FastOPTICS, HDBSCAN\* | manual, same CSVs | FastOPTICS = the sOPTICS parity reference (#53) |
@@ -206,6 +217,8 @@ The "all-over-the-place" perf tests become the **per-cell executors** of one gri
 | `approx_probe.cpp` (`optics_approx_probe`) | D1/D3 recall-vs-speed Pareto | extend to the full d-sweep (the "approx-backend sweep study" in `ROADMAP-post-0.9.1.md` §2) |
 | `quality_compare.cpp` + `quality_benchmark.py` | Tier C quality + D4 eps decision | already does uniform/knee/explicit eps, ARI/NMI/Rand, dbscan-R, sklearn |
 | `soptics_compare.cpp` (`optics_soptics_compare`) | D2 sOPTICS-vs-OPTICS crossover | sweep n×density rather than 3 fixed blob scenarios |
+| `hdbscan_compare.cpp` (#52, merged) | Tier A/B HDBSCAN\* timing + D5 HDBSCAN\*-vs-sHDBSCAN crossover | sweep n×d×density; emit timing + labels (it already cross-checks vs sklearn at ARI 0.99–1.00) |
+| `hdbscan_benchmark.py` (#52, merged) | Tier C HDBSCAN\*/sHDBSCAN quality vs sklearn HDBSCAN + ground truth | already scores ARI/NMI/Rand + an ours-vs-sklearn agreement column; add fast_hdbscan / scikit-learn-contrib/hdbscan refs |
 | `timing_images.py` | Tier E real images | already produces the headline real-world table |
 | `perf.cpp` (`optics_perf`) | **kept separate** — microbench / regression gate (#48) | not a matrix cell; feeds CI perf gate, not the study |
 
@@ -263,8 +276,9 @@ if ignored, produces a misleading number:
 
 ## 10. Phasing & exit criteria
 
-- **Phase 0 — prerequisites:** all 1.0.0 features merged (#47, #50–#54), generator + orchestrator +
-  adapters built (§8), correctness gate green.
+- **Phase 0 — prerequisites:** all 1.0.0 features merged (#46, #47, #50–#52, #54–#55, #58 — ✅ done;
+  ELKI/sDbscan deferred), generator + orchestrator + adapters built (§8), correctness gate green.
+  This is the **current blocker** — none of §8 exists yet.
 - **Phase 1 — pilot:** run Tiers at small n to fit cost models, finalize feasibility caps, publish
   the cell count + wall-clock budget here.
 - **Phase 2 — full run:** Tiers A–E + LHS fill, checkpointed, on the reference machine (+container).
