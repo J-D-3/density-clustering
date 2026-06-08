@@ -9,12 +9,13 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
 ### Added
 - **Optional HNSW approximate backend** `HnswBackend<T,Dim>` (`include/optics/hnsw_backend.hpp`, behind
   `OPTICS_ENABLE_HNSW`, OFF by default; vendored header-only hnswlib under `include/optics/hnswlib/`,
-  Apache-2.0). Models the `NeighborSearch` concept (radius search via grow-k k-NN + filter) and the optional
-  `KnnCoreDist` capability. **Honest finding from the new `optics_hnsw_probe` recall/speed harness:** at the
-  library's target dimensionalities (≤32-D, up to ~50k points) the exact nanoflann KD-tree is *faster* than
-  HNSW for radius search despite HNSW's ~1.0 recall — the KD-tree doesn't degrade until much higher D, and the
-  radius access pattern doesn't suit HNSW's k-NN-native design. So HNSW is an opt-in very-high-D escape hatch,
-  not a 16-D default. Gated test verifies the concept + recall + end-to-end clustering (#47).
+  Apache-2.0). Models the `NeighborSearch` concept (radius search via hnswlib's native epsilon range search —
+  a single graph traversal) and the optional `KnnCoreDist` capability. **Measured (new `optics_hnsw_probe`
+  recall/speed harness, adaptive ~30-NN radius, n≈19k):** HNSW's query time is essentially dimension-independent
+  (~55–80 ms across 16–128-D) while the exact KD-tree grows with D (34 → 82 → 224 ms) — they **cross over at
+  ~64-D**, with HNSW ~2.8× faster by 128-D (recall ~0.92–0.99, tunable via M / ef). At the 16-D target the exact
+  KD-tree is still ~2× faster, so nanoflann stays the default and HNSW is the high-D (≥64-D) tool. Gated test
+  verifies the concept + recall + end-to-end clustering (#47).
 - **Non-Euclidean metrics for sOPTICS** (`Metric` enum + `metric` / `kernel_scale` arguments on
   `compute_soptics_reachability_dists`): `Metric::L2` and `Metric::L1` embed points into random Fourier
   features (`include/optics/detail/random_features.hpp`) whose cosine similarity approximates the

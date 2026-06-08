@@ -4,10 +4,12 @@
 // (See accompanying file LICENSE)
 
 // HNSW backend recall-vs-speed probe (issue #47). Compares the approximate HNSW backend
-// against exact nanoflann and the eps-approximate nanoflann backend in high dimensions,
-// reporting index-build time, total radius-query time over a sample, and neighbor-set
-// recall vs exact. HNSW's query cost is largely dimension-independent, so its advantage
-// grows with Dim while its recall stays high for well-separated data. Built only when
+// against exact nanoflann and the eps-approximate nanoflann backend across a range of
+// dimensions, reporting index-build time, total radius-query time over a sample, and
+// neighbor-set recall vs exact. The radius is chosen adaptively per cloud (the median
+// 30-th-NN distance) so the neighborhood size is comparable across dimensions -- a fair
+// timing comparison. HNSW's query cost is largely dimension-independent, so the KD-tree's
+// advantage at low/moderate D should erode (and reverse) as D grows. Built only when
 // OPTICS_ENABLE_HNSW is ON; Release config; not a ctest.
 //
 // Usage: optics_hnsw_probe [scale]   (scale multiplies the point count; default 1)
@@ -18,9 +20,10 @@
 
 #include "bench_config.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
-#include <iostream>
+#include <limits>
 #include <set>
 #include <string>
 #include <vector>
@@ -49,19 +52,28 @@ std::pair<long long, double> query_and_recall(
 }
 
 template <std::size_t Dim>
-void run( std::size_t n_blobs, std::size_t per, double r ) {
+void run( std::size_t n_blobs, std::size_t per, std::size_t target_k ) {
 	const auto pts = optics::testdata::make_blobs<double, Dim>( n_blobs, per, 30.0, 1.0, 71u );
 	const std::size_t n = pts.size();
-	const std::size_t stride = std::max<std::size_t>( 1, n / 800 );
+	const std::size_t stride = std::max<std::size_t>( 1, n / 600 );
 
-	// Exact reference neighbor sets (the recall denominator).
 	const optics::NanoflannBackend<double, Dim> exact( pts );
+
+	// Adaptive radius: the median target_k-th-NN distance over the sample, so the neighborhood
+	// size is ~constant across dimensions (otherwise a fixed r captures ~0 or ~all in high D).
+	std::vector<double> kd;
+	for ( std::size_t i = 0; i < n; i += stride ) {
+		const auto cd = exact.knn_core_dist( pts[i], target_k, std::numeric_limits<double>::max() );
+		if ( cd ) { kd.push_back( *cd ); }
+	}
+	std::nth_element( kd.begin(), kd.begin() + kd.size() / 2, kd.end() );
+	const double r = kd.empty() ? 1.0 : kd[kd.size() / 2];
+
 	std::vector<std::vector<std::size_t>> truth;
 	for ( std::size_t i = 0; i < n; i += stride ) {
 		truth.emplace_back();
 		exact.radius_search( pts[i], r, truth.back() );
 	}
-
 	const auto [ex_ms, ex_rec] = query_and_recall<Dim>( exact, pts, r, truth, stride );
 
 	sw::Stopwatch wb_ap;
@@ -70,7 +82,7 @@ void run( std::size_t n_blobs, std::size_t per, double r ) {
 	const auto [ap_ms, ap_rec] = query_and_recall<Dim>( approx, pts, r, truth, stride );
 
 	sw::Stopwatch wb_hn;
-	const optics::HnswBackend<double, Dim> hnsw( pts, 32, 400 );
+	const optics::HnswBackend<double, Dim> hnsw( pts );  // default M=16, ef_construction=200
 	const long long hn_build = static_cast<long long>( bench::ceil_ms_from_us( wb_hn.elapsed<sw::mus>() ) );
 	const auto [hn_ms, hn_rec] = query_and_recall<Dim>( hnsw, pts, r, truth, stride );
 
@@ -85,10 +97,14 @@ void run( std::size_t n_blobs, std::size_t per, double r ) {
 int main( int argc, char** argv ) {
 	std::size_t scale = 1;
 	if ( argc > 1 ) { scale = std::max<std::size_t>( 1, static_cast<std::size_t>( std::stoul( argv[1] ) ) ); }
-	std::cerr << "HNSW recall-vs-speed probe (scale=" << scale << ", recall vs exact nanoflann)\n";
+	std::cerr << "HNSW recall-vs-speed probe (scale=" << scale
+			  << ", adaptive radius ~30-NN; HNSW default params; recall vs exact nanoflann)\n";
 	std::cout << "backend,n,dim,build_ms,query_ms,recall\n";
-	run<8>( 6, 500 * scale, 6.0 );
-	run<16>( 6, 500 * scale, 6.0 );
-	run<32>( 6, 500 * scale, 7.0 );
+	run<16>( 6, 800 * scale, 30 );
+	run<64>( 6, 800 * scale, 30 );
+	run<128>( 6, 800 * scale, 30 );
+	// Capped at 128-D: the exact NanoflannBackend baseline (a compile-time-Dim kd-tree)
+	// overflows the stack to construct at 256-D, so there is no exact ground truth to score
+	// against there -- itself a sign the static-dimension KD-tree is the wrong tool that high.
 	return 0;
 }

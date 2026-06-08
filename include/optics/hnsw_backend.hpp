@@ -52,10 +52,11 @@ public:
 
 	explicit HnswBackend( const std::vector<Point>& points, std::size_t M = 16,
 						   std::size_t ef_construction = 200, std::size_t ef_search = 0 )
-		: space_( Dim ), n_( points.size() ) {
+		: space_( Dim ), n_( points.size() ),
+		  ef_search_( ef_search != 0 ? ef_search : std::max<std::size_t>( ef_construction, 64 ) ) {
 		index_ = std::make_unique<hnswlib::HierarchicalNSW<float>>(
 			&space_, std::max<std::size_t>( n_, 1 ), M, ef_construction );
-		index_->setEf( ef_search != 0 ? ef_search : std::max<std::size_t>( ef_construction, 64 ) );
+		index_->setEf( ef_search_ );
 		std::array<float, Dim> buf;
 		for ( std::size_t i = 0; i < n_; ++i ) {
 			for ( std::size_t c = 0; c < Dim; ++c ) { buf[c] = static_cast<float>( points[i][c] ); }
@@ -64,27 +65,19 @@ public:
 	}
 
 	// Append the indices of all points within (approximate) Euclidean distance r of p to out.
-	// HNSW is a k-NN index, so we grow k until the farthest returned neighbor lies beyond r
-	// (capped at n), then keep those within r -- an approximate radius search.
+	// Uses hnswlib's native range search: a SINGLE graph traversal driven by an epsilon stop
+	// condition collects every point within r (filtered to <= r internally, so no spurious
+	// neighbors and no per-query growth). min_candidates bounds recall (explore at least that
+	// many before stopping at the r frontier); max_candidates caps a very dense neighborhood.
 	void radius_search( const Point& p, T r, std::vector<std::size_t>& out ) const {
 		if ( n_ == 0 ) { return; }
 		const std::array<float, Dim> q = to_float( p );
-		const float r_sq = static_cast<float>( r ) * static_cast<float>( r );
-		std::size_t k = std::min<std::size_t>( n_, 32 );
-		for ( ;; ) {
-			auto res = index_->searchKnnCloserFirst( q.data(), k );  // (sq_dist, label), closer-first
-			// If even the farthest of the k is still within r and more points remain, grow k so
-			// we don't truncate the neighborhood; otherwise emit those within r.
-			if ( !res.empty() && res.back().first <= r_sq && k < n_ ) {
-				k = std::min<std::size_t>( n_, k * 2 );
-				continue;
-			}
-			out.reserve( out.size() + res.size() );
-			for ( const auto& dl : res ) {
-				if ( dl.first <= r_sq ) { out.push_back( static_cast<std::size_t>( dl.second ) ); }
-			}
-			return;
-		}
+		const float r_sq = static_cast<float>( r ) * static_cast<float>( r );  // L2Space works in squared dist
+		const std::size_t min_c = std::min<std::size_t>( n_, ef_search_ );
+		hnswlib::EpsilonSearchStopCondition<float> stop( r_sq, min_c, n_ );
+		auto res = index_->searchStopConditionClosest( q.data(), stop );  // all within r_sq, closer-first
+		out.reserve( out.size() + res.size() );
+		for ( const auto& dl : res ) { out.push_back( static_cast<std::size_t>( dl.second ) ); }
 	}
 
 	// Core-distance via a k-NN query: (approximate) distance to the min_pts-th nearest point,
@@ -109,6 +102,7 @@ private:
 
 	hnswlib::L2Space space_;  // declared before index_: constructed first, destroyed last
 	std::size_t n_;
+	std::size_t ef_search_;
 	std::unique_ptr<hnswlib::HierarchicalNSW<float>> index_;
 };
 
