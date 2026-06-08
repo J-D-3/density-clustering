@@ -87,6 +87,11 @@ target_link_libraries(optics_reuse_probe PRIVATE optics::optics)
 add_executable(optics_soptics_reuse_probe Benchmark/soptics_reuse_probe.cpp)
 target_link_libraries(optics_soptics_reuse_probe PRIVATE optics::optics)
 
+# sOPTICS projection probe (#58): Gaussian vs structured (FHT spinner) projection timing + Rand
+# vs exact OPTICS across dimension. Release config; not a ctest.
+add_executable(optics_soptics_proj_probe Benchmark/soptics_proj_probe.cpp)
+target_link_libraries(optics_soptics_proj_probe PRIVATE optics::optics)
+
 # HNSW recall-vs-speed probe (#47): HNSW vs exact / eps-approx nanoflann in high-D. Only
 # built with the optional HNSW backend enabled. Release config; not a ctest.
 if(OPTICS_ENABLE_HNSW)

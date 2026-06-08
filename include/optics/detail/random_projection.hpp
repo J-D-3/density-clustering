@@ -20,9 +20,19 @@
 //
 // Reimplemented from the paper only: the reference repo NinhPham/sDbscan is
 // unlicensed, so no third-party code is used and the library stays dependency-free.
-// A structured (Hadamard/FHT) projection is a future speedup; this first version uses
-// plain Gaussian projections.
+//
+// Two projection backends (CeosParams::projection):
+//   - Gaussian (default): D explicit N(0,1) vectors; each projection is an O(Dim) dot product,
+//     computed on the fly so no n x D matrix is materialized (O(D*m) memory).
+//   - Structured (opt-in, issue #58): random "spinners" x -> H D3 H D2 H D1 x (sign-flip then
+//     fast Walsh-Hadamard transform, three rounds) approximate Gaussian projections at
+//     O(D log Dim) per point instead of O(D*Dim). The whole n x D projection table is
+//     materialized once (O(n*D) memory) because the FHT produces all of a block's outputs
+//     together. This is a HIGH-DIMENSION optimization: measured ~1.2-1.4x faster at >= 64-D with
+//     unchanged recall, but break-even at ~16-D and recall-lossy at very low Dim (the Hadamard
+//     block next_pow2(Dim) is tiny there), so the default stays Gaussian. See perf/README.md.
 
+#include "hadamard.hpp"
 #include "math.hpp"
 #include "thread_pool.hpp"
 
@@ -39,11 +49,13 @@ namespace optics::detail {
 // min_pts; k is a small constant (more extreme vectors => higher recall, but more
 // distance computations per point: the candidate pool is at most 2 * k * m).
 struct CeosParams {
-	unsigned n_projections = 1024;   // D: number of Gaussian random vectors
+	enum class Projection { Gaussian, Structured };
+	unsigned n_projections = 1024;   // D: number of random projection vectors
 	unsigned k = 0;                  // top-k closest/furthest vectors per point (0 => default 10)
 	std::size_t m = 0;               // top-m closest/furthest points per vector (0 => 2*min_pts)
 	unsigned seed = 42;
 	unsigned n_threads = 0;          // 0 => hardware concurrency
+	Projection projection = Projection::Gaussian;  // Structured = FHT spinners (issue #58)
 };
 
 // Build approximate epsilon-neighborhoods via CEOs. `points` should be L2-normalized
@@ -75,16 +87,49 @@ std::vector<std::vector<std::size_t>> ceos_neighbors(
 		n, params.m ? params.m : std::max<std::size_t>( 2 * min_pts, 1 ) );
 	const double eps_sq = ( eps <= 0.0 ) ? 0.0 : eps * eps;
 
-	// 1. D Gaussian random projection vectors r_j in R^Dim (coordinates ~ N(0,1), as
-	//    in the paper -- not unit-normalized).
+	const bool structured = ( params.projection == CeosParams::Projection::Structured );
+
+	// 1. Build the projection backend.
+	// Gaussian: D explicit N(0,1) vectors, dotted on the fly (no n x D matrix).
+	// Structured: precompute the n x D projection table via FHT spinners (see header).
 	std::mt19937 gen( params.seed );
 	std::normal_distribution<double> gauss( 0.0, 1.0 );
-	std::vector<std::array<double, Dim>> R( D );
-	for ( unsigned j = 0; j < D; ++j ) {
-		for ( std::size_t c = 0; c < Dim; ++c ) { R[j][c] = gauss( gen ); }
+	std::vector<std::array<double, Dim>> R;  // Gaussian path only
+	std::vector<double> proj;                // Structured path only: flat n x D, row-major
+
+	if ( structured ) {
+		const std::size_t d0 = detail::next_pow2( Dim );             // padded, power-of-two block width
+		const std::size_t nblocks = ( D + d0 - 1 ) / d0;            // stacked blocks to reach >= D outputs
+		// Three random sign rows per block (the D1/D2/D3 diagonals), generated up front so the
+		// result is deterministic in seed and independent of the thread count.
+		std::vector<std::vector<double>> signs( nblocks * 3, std::vector<double>( d0 ) );
+		std::uniform_int_distribution<int> coin( 0, 1 );
+		for ( auto& row : signs ) {
+			for ( std::size_t t = 0; t < d0; ++t ) { row[t] = coin( gen ) ? 1.0 : -1.0; }
+		}
+		proj.assign( n * static_cast<std::size_t>( D ), 0.0 );
+		parallel_for( params.n_threads, n, [&]( std::size_t i ) {
+			std::vector<double> x( d0 );
+			for ( std::size_t b = 0; b < nblocks; ++b ) {
+				for ( std::size_t t = 0; t < d0; ++t ) { x[t] = ( t < Dim ) ? static_cast<double>( points[i][t] ) : 0.0; }
+				for ( std::size_t r = 0; r < 3; ++r ) {
+					const auto& s = signs[b * 3 + r];
+					for ( std::size_t t = 0; t < d0; ++t ) { x[t] *= s[t]; }
+					detail::fwht_inplace( x );
+				}
+				const std::size_t base = b * d0;
+				for ( std::size_t t = 0; t < d0 && base + t < D; ++t ) { proj[i * D + base + t] = x[t]; }
+			}
+		} );
+	} else {
+		R.resize( D );
+		for ( unsigned j = 0; j < D; ++j ) {
+			for ( std::size_t c = 0; c < Dim; ++c ) { R[j][c] = gauss( gen ); }
+		}
 	}
 
 	const auto project = [&]( std::size_t i, unsigned j ) -> double {
+		if ( structured ) { return proj[i * D + j]; }
 		double s = 0.0;
 		for ( std::size_t c = 0; c < Dim; ++c ) { s += static_cast<double>( points[i][c] ) * R[j][c]; }
 		return s;

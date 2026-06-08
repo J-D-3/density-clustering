@@ -37,6 +37,10 @@ namespace optics {
 // metric (no embedding); L2/L1 go through random Fourier features (detail below).
 enum class Metric { Cosine, L2, L1 };
 
+// CEOs projection backend for sOPTICS (issue #58). Gaussian = explicit N(0,1) vectors; Structured =
+// FHT "spinners" (faster projection at high Dim / small n). See detail/random_projection.hpp.
+enum class SopticsProjection { Gaussian, Structured };
+
 }  // namespace optics
 
 namespace optics::detail {

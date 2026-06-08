@@ -662,13 +662,20 @@ std::vector<reachability_dist> compute_reachability_dists(
 //                   Manhattan distance on the ORIGINAL data. (chi^2 / JS: not yet, see #51.)
 //   kernel_scale  : kernel bandwidth (sigma) for L2 / L1; <= 0 => an auto median-distance
 //                   heuristic. Ignored for Cosine.
+//   projection    : CEOs projection backend (issue #58). Gaussian (default) dots each point with
+//                   D explicit N(0,1) vectors. Structured uses FHT "spinners" -- O(D log Dim) per
+//                   point instead of O(D*Dim), at the cost of materializing the n x D table. It is a
+//                   HIGH-DIMENSION optimization (~1.2-1.4x at >= 64-D, unchanged recall; break-even
+//                   at ~16-D, recall-lossy at very low Dim), so default Gaussian. See perf/README.md.
+//                   Approximate either way (validated by Rand agreement, not bit-identity).
 template <class T, std::size_t Dim>
 std::vector<reachability_dist> compute_soptics_reachability_dists(
 		const std::vector<std::array<T, Dim>>& points, std::size_t min_pts,
 		double epsilon = -1.0, unsigned n_projections = 1024, unsigned k = 0,
 		std::size_t m = 0, unsigned seed = 42, unsigned n_threads = 0,
 		Metric metric = Metric::Cosine, double kernel_scale = 0.0,
-		const std::vector<std::size_t>& weights = {} ) {
+		const std::vector<std::size_t>& weights = {},
+		SopticsProjection projection = SopticsProjection::Gaussian ) {
 
 	static_assert( std::is_floating_point_v<T>, "compute_soptics_reachability_dists: coordinate type 'T' must be float or double" );
 	static_assert( Dim >= 1, "compute_soptics_reachability_dists: dimension must be >= 1" );
@@ -695,7 +702,7 @@ std::vector<reachability_dist> compute_soptics_reachability_dists(
 		const double sigma = ( kernel_scale > 0.0 ) ? kernel_scale : detail::auto_kernel_scale( points, metric );
 		const auto feats = detail::embed_random_features<FeatDim, T, Dim>( points, metric, sigma, seed, n_threads );
 		return compute_soptics_reachability_dists<double, FeatDim>(
-			feats, min_pts, epsilon, n_projections, k, m, seed, n_threads, Metric::Cosine, 0.0, weights );
+			feats, min_pts, epsilon, n_projections, k, m, seed, n_threads, Metric::Cosine, 0.0, weights, projection );
 	}
 
 	// L2-normalize onto the unit sphere (cosine metric). A zero-norm point (the origin)
@@ -725,6 +732,9 @@ std::vector<reachability_dist> compute_soptics_reachability_dists(
 	params.m = m;
 	params.seed = seed;
 	params.n_threads = n_threads;
+	params.projection = ( projection == SopticsProjection::Structured )
+		? detail::CeosParams::Projection::Structured
+		: detail::CeosParams::Projection::Gaussian;
 	// The CEOs index returns each candidate's squared distance (computed in its eps-filter)
 	// alongside the neighbor list, so the core-distance scan and the relaxation reuse them
 	// instead of recomputing detail::square_dist -- the sOPTICS analogue of #55. All these
