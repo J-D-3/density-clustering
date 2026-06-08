@@ -90,13 +90,17 @@ Update it to:
   ours-vs-sklearn agreement column; our exact HDBSCAN matched scikit-learn at ARI 0.99–1.00 across 13
   datasets). Add scikit-learn-contrib/`hdbscan` and TutteInstitute/`fast_hdbscan` as references.
 
-### B1 — Build the §8 infrastructure (none of it exists yet)
+### B1 — Build the §8 infrastructure
 
-1. **`testdata.hpp` extension + `gen_dataset` CLI** — `(n, d, k, density-regime, noise-frac, seed)` →
-   coords CSV **+ ground-truth-label CSV**, using the §2 separation-ratio density definition and
-   non-spherical shapes (moons / spiral lifted to d-D). The current generators
-   (`gaussian_blobs` / `uniform_noise` / `make_blobs`) have **no k/density/noise control and emit no
-   labels** — this is the single biggest gap.
+1. **✅ DONE — `tools/gen_dataset.py`** (`(n, d, k, density, noise, shape, seed)` → coords CSV +
+   truth CSV). Built in **Python**, not as a `testdata.hpp` extension: the orchestrator is Python and
+   every engine (ours via `csv_points.hpp`, sklearn, dbscan-R, ELKI) consumes the *same* on-disk CSV,
+   which is what makes the comparison fair (§7 / §9); `testdata.hpp` stays for in-process C++ unit
+   fixtures. Implements the §2 separation-ratio density (`rho = sep/sigma`; dense≈2, sparse≈10, mixed
+   = varied σ + varied populations + noise — verified exact), exact d-D min-separation blob placement,
+   and non-spherical shapes (moons/spiral) as thin manifolds embedded by a random orthonormal rotation
+   (so they stay recoverable in any d and aren't axis-aligned). Sanity-checked: sklearn-HDBSCAN ARI
+   0.78–0.95 vs truth across regimes at d=2..16. Reuses `datasets.write_csv`.
 2. **`optics_matrix` exe** — one binary with explicit `Dim` instantiations for
    {1,2,3,4,6,8,12,16,32,64,128} dispatched by a runtime `switch(dim)` (watch binary size).
 3. **`tools/run_matrix.py`** — expand tier specs → cells; feasibility-gate + timeout (§3b: predict
