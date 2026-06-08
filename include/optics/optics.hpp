@@ -12,6 +12,7 @@
 #include "detail/thread_pool.hpp"
 #include "detail/profile.hpp"
 #include "detail/random_projection.hpp"
+#include "detail/random_features.hpp"
 
 #include <algorithm>
 #include <array>
@@ -449,16 +450,36 @@ std::vector<reachability_dist> compute_reachability_dists(
 //                   vector). 0 => defaults (k = 10, m = 2*min_pts).
 //   seed          : RNG seed for the projections (determinism).
 //   n_threads     : workers for the parallel projection/candidate phases (0 => hw).
+//   metric        : which geometry the clustering should reflect (issue #51). Cosine
+//                   (default) is the native CEOs metric. L2 / L1 embed the points into
+//                   random Fourier features whose cosine similarity approximates the
+//                   Gaussian / Laplacian kernel (detail/random_features.hpp), then run the
+//                   cosine pipeline on the features -- so the ordering tracks Euclidean /
+//                   Manhattan distance on the ORIGINAL data. (chi^2 / JS: not yet, see #51.)
+//   kernel_scale  : kernel bandwidth (sigma) for L2 / L1; <= 0 => an auto median-distance
+//                   heuristic. Ignored for Cosine.
 template <class T, std::size_t Dim>
 std::vector<reachability_dist> compute_soptics_reachability_dists(
 		const std::vector<std::array<T, Dim>>& points, std::size_t min_pts,
 		double epsilon = -1.0, unsigned n_projections = 1024, unsigned k = 0,
-		std::size_t m = 0, unsigned seed = 42, unsigned n_threads = 0 ) {
+		std::size_t m = 0, unsigned seed = 42, unsigned n_threads = 0,
+		Metric metric = Metric::Cosine, double kernel_scale = 0.0 ) {
 
 	static_assert( std::is_floating_point_v<T>, "compute_soptics_reachability_dists: coordinate type 'T' must be float or double" );
 	static_assert( Dim >= 1, "compute_soptics_reachability_dists: dimension must be >= 1" );
 	if ( min_pts < 1 ) { throw std::invalid_argument( "compute_soptics_reachability_dists: min_pts must be >= 1" ); }
 	if ( points.empty() ) { return {}; }
+
+	// Non-cosine metric: embed into random Fourier features whose cosine geometry
+	// approximates the target kernel, then run the cosine pipeline on the features. The
+	// result's point indices line up 1:1 with the input, so extraction is unchanged.
+	if ( metric != Metric::Cosine ) {
+		constexpr std::size_t FeatDim = 256;  // 128 random frequencies (cos/sin pairs)
+		const double sigma = ( kernel_scale > 0.0 ) ? kernel_scale : detail::auto_kernel_scale( points, metric );
+		const auto feats = detail::embed_random_features<FeatDim, T, Dim>( points, metric, sigma, seed, n_threads );
+		return compute_soptics_reachability_dists<double, FeatDim>(
+			feats, min_pts, epsilon, n_projections, k, m, seed, n_threads, Metric::Cosine, 0.0 );
+	}
 
 	// L2-normalize onto the unit sphere (cosine metric). A zero-norm point (the origin)
 	// has no direction; leave it unchanged -- it is a degenerate input either way.

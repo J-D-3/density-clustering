@@ -7,6 +7,15 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
 ## [Unreleased]
 
 ### Added
+- **Non-Euclidean metrics for sOPTICS** (`Metric` enum + `metric` / `kernel_scale` arguments on
+  `compute_soptics_reachability_dists`): `Metric::L2` and `Metric::L1` embed points into random Fourier
+  features (`include/optics/detail/random_features.hpp`) whose cosine similarity approximates the
+  Gaussian / Laplacian kernel (Rahimi & Recht 2007), then run the existing cosine CEOs/sOPTICS pipeline
+  on the features — so the cluster-ordering tracks Euclidean / Manhattan distance on the *original* data.
+  `kernel_scale <= 0` uses a median-distance auto bandwidth. `Metric::Cosine` (default) is unchanged.
+  χ² / Jensen-Shannon are not yet implemented (they need non-negative histogram inputs and a different
+  feature construction) — see #51. Validated by Rand-index agreement with exact Euclidean OPTICS and
+  seed-determinism (#51).
 - `optics::compute_soptics_reachability_dists` — **sOPTICS**, a scalable, approximate OPTICS via CEOs
   random projections (sDBSCAN/sOPTICS, Xu & Pham, NeurIPS 2024), reimplemented from the paper. Cosine
   metric (points are L2-normalized onto the unit sphere internally); returns the same
