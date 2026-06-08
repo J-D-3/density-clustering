@@ -107,3 +107,60 @@ jobs:
         env:
           ASAN_OPTIONS: detect_leaks=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+
+  hnsw-backend:
+    name: Linux GCC + HNSW backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # HnswBackend ships behind OPTICS_ENABLE_HNSW (vendored hnswlib) and is OFF by default, so
+      # the default jobs above never compile or exercise it. This job builds it and runs the gated
+      # HnswBackend unit test (recall + end-to-end clustering) so the high-D backend stays green (#47).
+      - name: Configure (HNSW backend enabled)
+        run: cmake --preset linux-gcc -DOPTICS_ENABLE_HNSW=ON
+
+      - name: Build
+        run: cmake --build --preset linux-gcc
+
+      - name: Test
+        run: ctest --preset linux-gcc
+
+  perf-gate:
+    name: Perf regression gate (back-to-back)
+    runs-on: ubuntu-latest
+    # Only on PRs: the gate compares the PR head against its base commit on the SAME runner,
+    # back-to-back (perf/README.md: a stale committed baseline is unreliable -- run-to-run and
+    # cross-machine variance swamp small deltas; only a same-machine back-to-back pair is meaningful).
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need the PR base commit reachable for the back-to-back build
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build + run optics_perf at HEAD
+        run: |
+          cp tools/perf_gate.py /tmp/perf_gate.py   # keep the head version across the base checkout
+          cmake -S . -B build-head -DCMAKE_BUILD_TYPE=Release -DOPTICS_BUILD_EXAMPLES=OFF
+          cmake --build build-head --config Release --target optics_perf
+          ( cd build-head && ./test/optics_perf )
+          cp build-head/optics_perf.csv head.csv
+
+      - name: Build + run optics_perf at the PR base
+        run: |
+          git checkout --detach ${{ github.event.pull_request.base.sha }}
+          cmake -S . -B build-base -DCMAKE_BUILD_TYPE=Release -DOPTICS_BUILD_EXAMPLES=OFF
+          cmake --build build-base --config Release --target optics_perf
+          ( cd build-base && ./test/optics_perf )
+          cp build-base/optics_perf.csv base.csv
+
+      - name: Compare base vs head (gate the stable hot paths)
+        # Gate the rock-solid hot path (core_dist, 10 epochs, #12) and the long-running dense-regime
+        # end-to-end (stable due to its ~2.5 s runtime); the short 30-110 ms "ordering ..." rows are
+        # printed for review but not gated, since shared-runner noise there can exceed the threshold.
+        # Tolerance is deliberately generous (1.5x); a single spurious spike can be confirmed by re-run.
+        run: python /tmp/perf_gate.py base.csv head.csv --tolerance 1.5 --only core_dist dense

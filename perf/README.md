@@ -46,8 +46,24 @@ days-old `baseline.csv` and trust small deltas. Instead, for each essential chan
    noise (rule of thumb: > ~15–20% on the microbenchmarks) as signal.
 
 Refresh `baseline.csv` after each landed Tier-0 change so it tracks the current best.
-CI may run `optics_perf` informationally, but timings are **not** a gate (runner hardware
-varies).
+
+### CI perf-regression gate (`tools/perf_gate.py`, #48)
+
+The `perf-gate` CI job (PRs only) automates exactly the back-to-back recipe above: it builds and
+runs `optics_perf` on the **PR base commit** and on the **PR head commit** on the *same* runner,
+then `tools/perf_gate.py base.csv head.csv` compares the per-benchmark `elapsed` column and **fails
+if a gated benchmark is slower than the tolerance** (default `1.5×`). Because both runs happen on one
+runner, cross-machine variance is removed and only run-to-run noise remains — which is why the gate
+gates the **stable** paths (`--only core_dist dense`: the `core_dist` microbenchmark and the
+long-running dense-regime end-to-end) and prints the noisier short `ordering …` rows for review only.
+It does **not** compare against the committed `baseline.csv` (that would reintroduce the stale-baseline
+trap). A spurious shared-runner spike can be confirmed with a re-run before treating a failure as real;
+adjust the tolerance/scope in `.github/workflows/ci.yml` if a path's behaviour legitimately changes.
+
+```sh
+# reproduce the gate locally (build + run on each commit, then compare):
+python tools/perf_gate.py base.csv head.csv --tolerance 1.5 --only core_dist dense
+```
 
 ## Large-scale validation (`optics_scale`)
 
