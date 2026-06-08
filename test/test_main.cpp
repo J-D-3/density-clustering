@@ -1206,6 +1206,39 @@ TEST_CASE("sOPTICS: edge cases (empty, < min_pts, identical points, high-D)") {
 }
 
 
+TEST_CASE("sOPTICS metrics (#51): L2/L1 random-feature embeddings recover Euclidean clustering") {
+	// Raw (un-normalized) Euclidean blobs: the metric path must recover the L2/L1 structure
+	// of the ORIGINAL data, not the cosine geometry of the cosine default.
+	const auto pts = optics::testdata::make_blobs<double, 4>( 5, 120, 30.0, 1.0, 321u );
+	const std::size_t n = pts.size();
+	const std::size_t min_pts = 6;
+
+	// Reference: exact Euclidean OPTICS. Extract via each ordering's OWN high-percentile
+	// threshold -- sOPTICS reachabilities live in feature-cosine units, exact OPTICS' in
+	// Euclidean units, so a per-ordering threshold makes the partitions comparable.
+	const auto exact = optics::compute_reachability_dists( pts, min_pts );
+	const auto exact_lbl = labels_from_clusters( n, optics::get_cluster_indices( exact, optics::detail::default_threshold( exact ) ) );
+
+	for ( const optics::Metric metric : { optics::Metric::L2, optics::Metric::L1 } ) {
+		const auto approx = optics::compute_soptics_reachability_dists(
+			pts, min_pts, -1.0, 1024u, 0u, std::size_t{ 0 }, 7u, 0u, metric );
+		check_ordering_invariants( approx, n );
+		const auto approx_lbl = labels_from_clusters( n, optics::get_cluster_indices( approx, optics::detail::default_threshold( approx ) ) );
+		CHECK( rand_index( exact_lbl, approx_lbl ) > 0.85 );  // both metrics separate these blobs
+
+		// Deterministic in seed.
+		const auto approx_same = optics::compute_soptics_reachability_dists(
+			pts, min_pts, -1.0, 1024u, 0u, std::size_t{ 0 }, 7u, 0u, metric );
+		CHECK( ( approx == approx_same ) );
+	}
+
+	// An explicit kernel bandwidth is accepted and yields a well-formed ordering.
+	const auto fixed = optics::compute_soptics_reachability_dists(
+		pts, min_pts, -1.0, 512u, 0u, std::size_t{ 0 }, 1u, 0u, optics::Metric::L2, 25.0 );
+	check_ordering_invariants( fixed, n );
+}
+
+
 TEST_CASE("Xi min_cluster_size: decoupled from min_pts, default-preserving (#57)") {
 	const auto pts = optics::testdata::make_blobs<double, 2>( 5, 60, 30.0, 1.0, 3u );
 	const std::size_t min_pts = 10;
