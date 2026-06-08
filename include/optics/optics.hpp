@@ -91,6 +91,20 @@ std::optional<double> compute_core_dist( const Point<T, Dim>& point,
 }
 
 
+// Core-distance from squared distances the backend already computed during the search
+// (RadiusSearchWithDists, issue #55), avoiding the recompute in compute_core_dist. The
+// nth_element runs on a thread_local copy so the caller's parallel-to-neighbors order is
+// preserved (the relaxation indexes into it). For a double backend the kth value is
+// bit-identical to compute_core_dist's. nullopt if fewer than min_pts neighbors.
+inline std::optional<double> compute_core_dist_from_sq( const std::vector<double>& sq_dists, std::size_t min_pts ) {
+	if ( sq_dists.size() < min_pts ) { return std::nullopt; }
+	thread_local std::vector<double> scratch;
+	scratch.assign( sq_dists.begin(), sq_dists.end() );
+	std::nth_element( scratch.begin(), scratch.begin() + ( min_pts - 1 ), scratch.end() );
+	return std::sqrt( scratch[min_pts - 1] );
+}
+
+
 // Min-heap order for the seed priority queue: smallest reachability first, ties
 // broken by smallest point index (matching reachability_dist's operator<). The
 // queue uses lazy deletion -- "decrease-key" pushes a new (smaller) entry and
@@ -114,12 +128,16 @@ using seed_queue = std::priority_queue<reachability_dist, std::vector<reachabili
 //        call, so an OnDemand provider may hand back a single reused buffer.
 //   core_dist_of(idx, nbrs) -> std::optional<double>            : idx's core distance,
 //        or nullopt when UNDEFINED (fewer than min_pts neighbors).
+//   dist_of(idx, j, o)      -> double  : distance between point idx and its j-th neighbor
+//        o = nbrs[j]. The default callers recompute detail::dist(points[idx], points[o]);
+//        a RadiusSearchWithDists backend instead returns the search's reused distance (#55).
+//        For the recompute default this is byte-identical to the previous inline call.
 //   prof : phase profiler; the relax and loop phases are accumulated here. The caller
 //        times index_build/precompute and calls prof.report() after this returns.
-template <class T, std::size_t Dim, class NeighborsOf, class CoreDistOf>
+template <class T, std::size_t Dim, class NeighborsOf, class CoreDistOf, class DistOf>
 std::vector<reachability_dist> optics_order(
 		const std::vector<Point<T, Dim>>& points,
-		NeighborsOf&& neighbors_of, CoreDistOf&& core_dist_of, PhaseProfiler& prof ) {
+		NeighborsOf&& neighbors_of, CoreDistOf&& core_dist_of, DistOf&& dist_of, PhaseProfiler& prof ) {
 	const std::size_t n = points.size();
 
 	std::vector<char> processed( n, 0 );
@@ -131,9 +149,10 @@ std::vector<reachability_dist> optics_order(
 	seed_queue seeds;
 	const auto relax_neighbors = [&]( std::size_t idx, const std::vector<std::size_t>& nbrs, double core_dist ) {
 		[[maybe_unused]] auto _s = prof.scope( prof.relax );
-		for ( const std::size_t o : nbrs ) {
+		for ( std::size_t j = 0; j < nbrs.size(); ++j ) {
+			const std::size_t o = nbrs[j];
 			if ( processed[o] ) { continue; }
-			const double new_rd = std::max( core_dist, detail::dist( points[idx], points[o] ) );
+			const double new_rd = std::max( core_dist, dist_of( idx, j, o ) );
 			if ( reachability[o] < 0.0 || new_rd < reachability[o] ) {
 				reachability[o] = new_rd;  // authoritative; the prior heap entry becomes stale
 				seeds.push( reachability_dist( o, new_rd ) );
@@ -358,6 +377,16 @@ std::vector<reachability_dist> compute_reachability_dists(
 	_prof.add( _prof.index_build, _t_build );
 	const std::size_t n = points.size();
 
+	// #55: a backend modeling RadiusSearchWithDists (double coordinates only, where its
+	// squared distances are bit-identical to detail::square_dist) lets us reuse the search's
+	// distances for the core-distance scan and the relaxation instead of recomputing them --
+	// a win on dense clouds, where neighborhood processing dominates. cur_sq points at the
+	// squared distances of the point currently being expanded (parallel to its neighbor
+	// list), valid until the next neighbors_of call.
+	constexpr bool reuse_dists = RadiusSearchWithDists<Backend, T, Dim>;
+	std::vector<std::vector<double>> neighbor_sq;   // parallel to `neighbors` (Precompute path)
+	const std::vector<double>* cur_sq = nullptr;
+
 	// Neighbor acquisition: precompute-all (parallel) or on-demand.
 	const auto _t_pre = _prof.now();
 	std::vector<std::vector<std::size_t>> neighbors;
@@ -388,16 +417,28 @@ std::vector<reachability_dist> compute_reachability_dists(
 			}
 		}
 		neighbors.resize( n );
+		if constexpr ( reuse_dists ) { neighbor_sq.resize( n ); }
 		detail::parallel_for( n_threads, n, [&]( std::size_t i ) {
-			backend.radius_search( points[i], eps_t, neighbors[i] );
+			if constexpr ( reuse_dists ) { backend.radius_search_with_dists( points[i], eps_t, neighbors[i], neighbor_sq[i] ); }
+			else { backend.radius_search( points[i], eps_t, neighbors[i] ); }
 		} );
 	}
 	_prof.add( _prof.precompute, _t_pre );
 	std::vector<std::size_t> ondemand_buf;
+	std::vector<double> ondemand_sq;
 	const auto neighbors_of = [&]( std::size_t idx ) -> const std::vector<std::size_t>& {
-		if ( mode == NeighborMode::Precompute ) { return neighbors[idx]; }
+		if ( mode == NeighborMode::Precompute ) {
+			if constexpr ( reuse_dists ) { cur_sq = &neighbor_sq[idx]; }
+			return neighbors[idx];
+		}
 		ondemand_buf.clear();
-		backend.radius_search( points[idx], eps_t, ondemand_buf );
+		if constexpr ( reuse_dists ) {
+			ondemand_sq.clear();
+			backend.radius_search_with_dists( points[idx], eps_t, ondemand_buf, ondemand_sq );
+			cur_sq = &ondemand_sq;
+		} else {
+			backend.radius_search( points[idx], eps_t, ondemand_buf );
+		}
 		return ondemand_buf;
 	};
 
@@ -405,7 +446,7 @@ std::vector<reachability_dist> compute_reachability_dists(
 	// dense clouds); both paths return identical values. if constexpr keeps the Knn
 	// branch out of instantiations for backends without the capability, which then
 	// always Scan.
-	const auto core_dist_of = [&]( std::size_t idx, const std::vector<std::size_t>& nbrs ) -> std::optional<double> {
+	const auto core_dist_of = [&]( std::size_t idx, [[maybe_unused]] const std::vector<std::size_t>& nbrs ) -> std::optional<double> {
 		[[maybe_unused]] auto _s = _prof.scope( _prof.core_dist );
 		(void)core_dist_mode;  // unused when the backend lacks a knn_core_dist capability
 		if constexpr ( KnnCoreDist<Backend, T, Dim> ) {
@@ -413,14 +454,24 @@ std::vector<reachability_dist> compute_reachability_dists(
 				return backend.knn_core_dist( points[idx], min_pts, eps_t );
 			}
 		}
-		return detail::compute_core_dist( points[idx], points, nbrs, min_pts );
+		if constexpr ( reuse_dists ) { (void)idx; return detail::compute_core_dist_from_sq( *cur_sq, min_pts ); }
+		else { return detail::compute_core_dist( points[idx], points, nbrs, min_pts ); }
 	};
 
-	// All neighbor/core-distance policy is now captured in the two closures above;
-	// the algorithm-agnostic ordering machinery lives in detail::optics_order (shared
-	// with sOPTICS). index_build/precompute were timed above; the helper accumulates
-	// the relax/loop phases into _prof, and we report once it returns.
-	auto result = detail::optics_order<T, Dim>( points, neighbors_of, core_dist_of, _prof );
+	// Pairwise distance for the relaxation: reuse the search's squared distance (#55) when
+	// available, else recompute. For the recompute default this is byte-identical to the
+	// previous inline detail::dist call, so OPTICS orderings are unchanged.
+	const auto dist_of = [&]( [[maybe_unused]] std::size_t idx, [[maybe_unused]] std::size_t j,
+							  [[maybe_unused]] std::size_t o ) -> double {
+		if constexpr ( reuse_dists ) { return std::sqrt( ( *cur_sq )[j] ); }
+		else { return detail::dist( points[idx], points[o] ); }
+	};
+
+	// All neighbor/core-distance policy is now captured in the closures above; the
+	// algorithm-agnostic ordering machinery lives in detail::optics_order (shared with
+	// sOPTICS). index_build/precompute were timed above; the helper accumulates the
+	// relax/loop phases into _prof, and we report once it returns.
+	auto result = detail::optics_order<T, Dim>( points, neighbors_of, core_dist_of, dist_of, _prof );
 	_prof.report( n );
 	return result;
 }
@@ -517,7 +568,10 @@ std::vector<reachability_dist> compute_soptics_reachability_dists(
 	const auto core_dist_of = [&]( std::size_t idx, const std::vector<std::size_t>& nbrs ) -> std::optional<double> {
 		return detail::compute_core_dist( unit[idx], unit, nbrs, min_pts );
 	};
-	auto result = detail::optics_order<T, Dim>( unit, neighbors_of, core_dist_of, prof );
+	const auto dist_of = [&]( std::size_t idx, [[maybe_unused]] std::size_t j, std::size_t o ) -> double {
+		return detail::dist( unit[idx], unit[o] );
+	};
+	auto result = detail::optics_order<T, Dim>( unit, neighbors_of, core_dist_of, dist_of, prof );
 	prof.report( points.size() );
 	return result;
 }
