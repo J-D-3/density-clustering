@@ -7,6 +7,14 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
 ## [Unreleased]
 
 ### Added
+- **Python binding for HDBSCAN\*** (#52, #23): `optics_py.hdbscan(points, min_cluster_size,
+  min_samples = 0, method = "eom", allow_single_cluster = False, n_threads = 0, dedup = True)`
+  exposes the parameter-light density clusterer to NumPy clouds (1/2/3/4-D, same dispatch as the
+  OPTICS functions). Returns a dict — `labels` (per-point int, `-1` = noise), `probabilities`
+  (`[0, 1]` membership strength), and `n_clusters`; `method` is `"eom"` (default) or `"leaf"`.
+  `dedup` is on by default (collapses bit-identical points — the flat-color win). `test_optics_py.py`
+  gained an HDBSCAN\* case (3-blob partition + label/probability shape + `[0,1]` bounds). sOPTICS /
+  sHDBSCAN remain C++-only for now.
 - **HDBSCAN\*** (#52): a new density-based clusterer that needs no `epsilon`/threshold — just
   `min_cluster_size` (plus an optional density smoother `min_samples`). New header
   `include/optics/hdbscan.hpp` exposes `optics::hdbscan(points, min_cluster_size, min_samples = 0,

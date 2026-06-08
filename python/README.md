@@ -33,6 +33,16 @@ labels_xi = optics_py.extract_xi(pts, min_pts=10, chi=0.05)
 
 # Raw ordering: point_index + reachability arrays (in cluster order; -1 = UNDEFINED)
 order = optics_py.compute_reachability(pts, min_pts=10)
+
+# HDBSCAN* -> a separate density clusterer, no epsilon/threshold: just min_cluster_size
+# (+ optional min_samples). Returns a dict: 'labels' (-1 = noise), 'probabilities' ([0,1]
+# membership strength), 'n_clusters'. method = 'eom' (default) or 'leaf'.
+res = optics_py.hdbscan(pts, min_cluster_size=15)
+labels_h, probs, k = res["labels"], res["probabilities"], res["n_clusters"]
 ```
+
+`hdbscan` deduplicates bit-identical points by default (`dedup=True`) — the big win on
+flat-color/quantized data. The exposed functions cover plain OPTICS + HDBSCAN\*; sOPTICS
+and sHDBSCAN live in the C++ headers but are not bound yet.
 
 Smoke test: `python python/test_optics_py.py build-py/python/Release`.

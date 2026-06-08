@@ -11,11 +11,13 @@
 #include <pybind11/numpy.h>
 
 #include <optics/optics.hpp>
+#include <optics/hdbscan.hpp>
 #include <optics/io.hpp>
 
 #include <array>
 #include <cstddef>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace py = pybind11;
@@ -114,6 +116,42 @@ py::dict compute_reachability_py( const Array& arr, std::size_t min_pts, double 
     }
 }
 
+// --- hdbscan: HDBSCAN* density clustering -> labels + probabilities -----------
+// Parameter-light (no epsilon/threshold): just min_cluster_size, plus an optional
+// min_samples density smoother. dedup (on by default) collapses bit-identical points
+// -- the big win on flat-color/quantized data. Returns labels (-1 == noise),
+// per-point membership probabilities in [0, 1], and the cluster count.
+template <std::size_t Dim>
+py::dict hdbscan_impl( const Array& arr, std::size_t min_cluster_size, std::size_t min_samples,
+                       const std::string& method, bool allow_single_cluster, unsigned n_threads, bool dedup ) {
+    const auto pts = to_points<Dim>( arr );
+    const auto sel = ( method == "leaf" || method == "Leaf" ) ? optics::ClusterSelectionMethod::Leaf
+                                                              : optics::ClusterSelectionMethod::EOM;
+    const auto res = optics::hdbscan( pts, min_cluster_size, min_samples, sel, allow_single_cluster, n_threads, dedup );
+    py::array_t<long long> labels( static_cast<py::ssize_t>( res.labels.size() ) );
+    py::array_t<double> probs( static_cast<py::ssize_t>( res.probabilities.size() ) );
+    auto l = labels.mutable_unchecked<1>();
+    auto p = probs.mutable_unchecked<1>();
+    for ( std::size_t i = 0; i < res.labels.size(); ++i ) { l( static_cast<py::ssize_t>( i ) ) = res.labels[i]; }
+    for ( std::size_t i = 0; i < res.probabilities.size(); ++i ) { p( static_cast<py::ssize_t>( i ) ) = res.probabilities[i]; }
+    py::dict d;
+    d["labels"] = labels;              // per point: cluster id 0..n_clusters-1, or -1 for noise
+    d["probabilities"] = probs;        // per point: membership strength in [0, 1] (0 for noise)
+    d["n_clusters"] = static_cast<long long>( res.n_clusters );
+    return d;
+}
+
+py::dict hdbscan_py( const Array& arr, std::size_t min_cluster_size, std::size_t min_samples,
+                     const std::string& method, bool allow_single_cluster, unsigned n_threads, bool dedup ) {
+    switch ( check_dim( arr ) ) {
+        case 1: return hdbscan_impl<1>( arr, min_cluster_size, min_samples, method, allow_single_cluster, n_threads, dedup );
+        case 2: return hdbscan_impl<2>( arr, min_cluster_size, min_samples, method, allow_single_cluster, n_threads, dedup );
+        case 3: return hdbscan_impl<3>( arr, min_cluster_size, min_samples, method, allow_single_cluster, n_threads, dedup );
+        case 4: return hdbscan_impl<4>( arr, min_cluster_size, min_samples, method, allow_single_cluster, n_threads, dedup );
+        default: throw std::invalid_argument( "only 1..4 dimensions are supported" );
+    }
+}
+
 }  // namespace
 
 PYBIND11_MODULE( optics_py, m ) {
@@ -139,4 +177,16 @@ PYBIND11_MODULE( optics_py, m ) {
            py::arg( "points" ), py::arg( "min_pts" ), py::arg( "epsilon" ) = -1.0,
            "Raw OPTICS ordering. Returns a dict with 'point_index' and 'reachability' arrays "
            "(in cluster order; reachability -1 means UNDEFINED)." );
+
+    m.def( "hdbscan", &hdbscan_py,
+           py::arg( "points" ), py::arg( "min_cluster_size" ), py::arg( "min_samples" ) = 0,
+           py::arg( "method" ) = "eom", py::arg( "allow_single_cluster" ) = false,
+           py::arg( "n_threads" ) = 0, py::arg( "dedup" ) = true,
+           "HDBSCAN* density clustering. Parameter-light: no epsilon/threshold -- just "
+           "min_cluster_size (the smallest group called a cluster, >= 2) and an optional "
+           "min_samples density smoother (0 => min_cluster_size). method is 'eom' (default, "
+           "most persistent clusters) or 'leaf' (finest). dedup collapses bit-identical points "
+           "(on by default; the big win on flat-color data). Returns a dict with 'labels' "
+           "(per-point int, -1 = noise), 'probabilities' ([0,1] membership strength), and "
+           "'n_clusters'." );
 }
