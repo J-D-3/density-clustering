@@ -559,17 +559,26 @@ std::vector<reachability_dist> compute_soptics_reachability_dists(
 	params.m = m;
 	params.seed = seed;
 	params.n_threads = n_threads;
-	const auto neighbors = detail::ceos_neighbors( unit, eps, min_pts, params );
+	// The CEOs index returns each candidate's squared distance (computed in its eps-filter)
+	// alongside the neighbor list, so the core-distance scan and the relaxation reuse them
+	// instead of recomputing detail::square_dist -- the sOPTICS analogue of #55. All these
+	// distances come from detail::square_dist, so the ordering is byte-identical to the
+	// recompute path (no double-only gate needed; cur_sq points at the current point's
+	// squared distances, parallel to its neighbor list).
+	std::vector<std::vector<double>> neighbor_sq;
+	const auto neighbors = detail::ceos_neighbors( unit, eps, min_pts, params, &neighbor_sq );
 
-	// Share the OPTICS ordering driver: neighbors come from the CEOs index, and the
-	// core-distance is the min_pts-th nearest among those candidates (the existing scan).
 	detail::PhaseProfiler prof;
-	const auto neighbors_of = [&]( std::size_t idx ) -> const std::vector<std::size_t>& { return neighbors[idx]; };
-	const auto core_dist_of = [&]( std::size_t idx, const std::vector<std::size_t>& nbrs ) -> std::optional<double> {
-		return detail::compute_core_dist( unit[idx], unit, nbrs, min_pts );
+	const std::vector<double>* cur_sq = nullptr;
+	const auto neighbors_of = [&]( std::size_t idx ) -> const std::vector<std::size_t>& {
+		cur_sq = &neighbor_sq[idx];
+		return neighbors[idx];
 	};
-	const auto dist_of = [&]( std::size_t idx, [[maybe_unused]] std::size_t j, std::size_t o ) -> double {
-		return detail::dist( unit[idx], unit[o] );
+	const auto core_dist_of = [&]( std::size_t /*idx*/, const std::vector<std::size_t>& /*nbrs*/ ) -> std::optional<double> {
+		return detail::compute_core_dist_from_sq( *cur_sq, min_pts );
+	};
+	const auto dist_of = [&]( std::size_t /*idx*/, std::size_t j, std::size_t /*o*/ ) -> double {
+		return std::sqrt( ( *cur_sq )[j] );
 	};
 	auto result = detail::optics_order<T, Dim>( unit, neighbors_of, core_dist_of, dist_of, prof );
 	prof.report( points.size() );

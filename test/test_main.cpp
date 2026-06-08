@@ -1041,6 +1041,36 @@ TEST_CASE("memory invariant: Precompute cache grows with n; OnDemand holds one n
 }
 
 
+TEST_CASE("ceos_neighbors out_sq: squared distances exact + parallel, neighbor lists unchanged (#55 sOPTICS reuse)") {
+	auto pts = optics::testdata::make_blobs<double, 3>( 4, 100, 30.0, 1.0, 17u );
+	for ( auto& p : pts ) {
+		const double s = std::sqrt( p[0] * p[0] + p[1] * p[1] + p[2] * p[2] );
+		if ( s > 0.0 ) { for ( auto& c : p ) { c /= s; } }
+	}
+	const std::size_t n = pts.size();
+	optics::detail::CeosParams params;
+	params.n_projections = 256;
+	params.k = 16;
+	params.seed = 3;
+
+	std::vector<std::vector<double>> nsq;
+	const auto nbrs = optics::detail::ceos_neighbors( pts, 0.3, 5, params, &nsq );
+	const auto nbrs_plain = optics::detail::ceos_neighbors( pts, 0.3, 5, params );  // no out_sq
+
+	REQUIRE( nbrs.size() == n );
+	REQUIRE( nsq.size() == n );
+	for ( std::size_t q = 0; q < n; ++q ) {
+		CHECK( ( nbrs[q] == nbrs_plain[q] ) );        // out_sq must not change the neighbor list
+		REQUIRE( nsq[q].size() == nbrs[q].size() );   // distances run parallel to indices
+		for ( std::size_t t = 0; t < nbrs[q].size(); ++t ) {
+			// Each reused squared distance is BIT-IDENTICAL to detail::square_dist -- the
+			// basis for sOPTICS reusing them in core-dist + relax without changing the ordering.
+			CHECK( nsq[q][t] == optics::detail::square_dist( pts[q], pts[nbrs[q][t]] ) );
+		}
+	}
+}
+
+
 TEST_CASE("ceos_neighbors: exact precision, good recall, symmetric, self-matching") {
 	// Four well-separated blobs, L2-normalized onto the unit sphere (cosine metric).
 	auto pts = optics::testdata::make_blobs<double, 3>( 4, 120, 30.0, 1.0, 123u );

@@ -24,6 +24,14 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
   API change, automatic. On a dense 3-D cloud (n=24k, `optics_reuse_probe`) this cut the core-distance phase
   ~30% and the relaxation ~23% (~12% off the ordering loop), with identical orderings. The `detail::optics_order`
   driver gains a third (distance) provider; the recompute default is byte-identical to the previous inline call.
+- **Distance reuse for sOPTICS** (the same idea on the random-projection path): `ceos_neighbors` optionally
+  returns each candidate's squared distance — the one its ε-filter already computed — parallel to the neighbor
+  lists (`out_sq`), and `compute_soptics_reachability_dists` reuses them in the core-distance scan and the
+  relaxation instead of recomputing. Because every distance comes from `detail::square_dist` (accumulated in
+  `double` regardless of `T`), the ordering is **byte-identical for both float and double** sOPTICS — no
+  double-only gate is needed (unlike the backend path). On a 16-D cloud (n=18k, `optics_soptics_reuse_probe`)
+  this cut the core-distance phase ~36% and the relaxation ~39% (~34% off the loop), orderings identical; the
+  win grows with dimension (e.g. the L2/L1 metric embeddings of #51).
 - `optics::compute_soptics_reachability_dists` — **sOPTICS**, a scalable, approximate OPTICS via CEOs
   random projections (sDBSCAN/sOPTICS, Xu & Pham, NeurIPS 2024), reimplemented from the paper. Cosine
   metric (points are L2-normalized onto the unit sphere internally); returns the same

@@ -53,12 +53,20 @@ struct CeosParams {
 // approximate neighbors within `eps` -- including the point itself, matching the
 // self-match a radius search returns. The relation is symmetrized: q in N(x) iff
 // x in N(q).
+// When out_sq != nullptr it is filled with each neighbor's SQUARED distance, parallel to
+// the returned neighbor lists (and reusing the detail::square_dist already computed in the
+// eps-filter, so the caller need not recompute it for the core-distance / relaxation --
+// the sOPTICS analogue of the RadiusSearchWithDists fast path, issue #55). Because every
+// distance comes from detail::square_dist (accumulated in double regardless of T), this is
+// bit-identical for both float and double sOPTICS -- no double-only gate is needed.
 template <class T, std::size_t Dim>
 std::vector<std::vector<std::size_t>> ceos_neighbors(
 		const std::vector<std::array<T, Dim>>& points, double eps,
-		std::size_t min_pts, const CeosParams& params = {} ) {
+		std::size_t min_pts, const CeosParams& params = {},
+		std::vector<std::vector<double>>* out_sq = nullptr ) {
 	const std::size_t n = points.size();
 	std::vector<std::vector<std::size_t>> neighbors( n );
+	if ( out_sq ) { out_sq->assign( n, {} ); }
 	if ( n == 0 ) { return neighbors; }
 
 	const unsigned D = std::max( 1u, params.n_projections );
@@ -106,7 +114,13 @@ std::vector<std::vector<std::size_t>> ceos_neighbors(
 	//     from those vectors' extreme points, keep candidates within eps. Parallel over
 	//     points -- each writes only its own directed list. Self is added (dist 0),
 	//     matching radius-search self-matches.
-	std::vector<std::vector<std::size_t>> directed( n );
+	// Carry each candidate's squared distance alongside its index so it can be reused
+	// downstream (out_sq). dist(q,x) == dist(x,q), so a reverse edge reuses the same value.
+	using Cand = std::pair<std::size_t, double>;  // (neighbor index, squared distance)
+	const auto by_index = []( const Cand& a, const Cand& b ) { return a.first < b.first; };
+	const auto same_index = []( const Cand& a, const Cand& b ) { return a.first == b.first; };
+
+	std::vector<std::vector<Cand>> directed( n );
 	parallel_for( params.n_threads, n, [&]( std::size_t q ) {
 		std::vector<std::pair<double, unsigned>> row( D );
 		for ( unsigned j = 0; j < D; ++j ) { row[j] = { project( q, j ), j }; }
@@ -121,32 +135,41 @@ std::vector<std::vector<std::size_t>> ceos_neighbors(
 		for ( unsigned t = 0; t < kk; ++t ) { qvecs.push_back( row[t].second ); }
 
 		auto& out = directed[q];
-		out.push_back( q );
+		out.emplace_back( q, 0.0 );  // self-match (distance 0)
 		for ( unsigned vi = 0; vi < qvecs.size(); ++vi ) {
 			// closest vectors contribute their closest points; furthest vectors their
 			// furthest points (both directions enrich the neighborhood, per the paper).
 			const auto& pts = ( vi < kk ) ? close_pts[qvecs[vi]] : far_pts[qvecs[vi]];
 			for ( const std::size_t x : pts ) {
 				if ( x == q ) { continue; }
-				if ( detail::square_dist( points[q], points[x] ) <= eps_sq ) { out.push_back( x ); }
+				const double sq = detail::square_dist( points[q], points[x] );
+				if ( sq <= eps_sq ) { out.emplace_back( x, sq ); }
 			}
 		}
-		std::sort( out.begin(), out.end() );
-		out.erase( std::unique( out.begin(), out.end() ), out.end() );
+		std::sort( out.begin(), out.end(), by_index );
+		out.erase( std::unique( out.begin(), out.end(), same_index ), out.end() );
 	} );
 
-	// 4. Symmetrize from the directed lists: x in N(q) <=> q in N(x). The reverse-edge
-	//    pass writes across points, so it is single-threaded; the dedup is parallel.
+	// 4. Symmetrize from the directed lists: x in N(q) <=> q in N(x), carrying the (shared)
+	//    squared distance. The reverse-edge pass writes across points, so it is
+	//    single-threaded; the dedup + split into indices (+ optional out_sq) is parallel.
+	std::vector<std::vector<Cand>> sym( n );
 	for ( std::size_t q = 0; q < n; ++q ) {
-		for ( const std::size_t x : directed[q] ) {
-			neighbors[q].push_back( x );
-			if ( x != q ) { neighbors[x].push_back( q ); }
+		for ( const Cand& c : directed[q] ) {
+			sym[q].push_back( c );
+			if ( c.first != q ) { sym[c.first].emplace_back( q, c.second ); }
 		}
 	}
 	parallel_for( params.n_threads, n, [&]( std::size_t q ) {
-		auto& v = neighbors[q];
-		std::sort( v.begin(), v.end() );
-		v.erase( std::unique( v.begin(), v.end() ), v.end() );
+		auto& v = sym[q];
+		std::sort( v.begin(), v.end(), by_index );
+		v.erase( std::unique( v.begin(), v.end(), same_index ), v.end() );
+		neighbors[q].reserve( v.size() );
+		for ( const Cand& c : v ) { neighbors[q].push_back( c.first ); }
+		if ( out_sq ) {
+			( *out_sq )[q].reserve( v.size() );
+			for ( const Cand& c : v ) { ( *out_sq )[q].push_back( c.second ); }
+		}
 	} );
 
 	return neighbors;
