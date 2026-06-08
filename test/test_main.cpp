@@ -1252,6 +1252,29 @@ TEST_CASE("backend matrix: clustering is consistent across neighbor-search backe
 }
 
 
+TEST_CASE("RadiusSearchWithDists: same neighbors as radius_search, exact squared distances (#55)") {
+	const auto pts = optics::testdata::make_blobs<double, 3>( 3, 80, 20.0, 1.0, 9u );
+	const optics::NanoflannBackend<double, 3> backend( pts );
+	const double r = 6.0;
+	for ( std::size_t i = 0; i < pts.size(); i += 7 ) {
+		std::vector<std::size_t> a, b;
+		std::vector<double> b_sq;
+		backend.radius_search( pts[i], r, a );
+		backend.radius_search_with_dists( pts[i], r, b, b_sq );
+		REQUIRE( b.size() == b_sq.size() );
+		CHECK( ( sorted( a ) == sorted( b ) ) );  // same neighbor set
+		// Each reused squared distance is BIT-IDENTICAL to detail::square_dist -- the basis
+		// for the #55 fast path leaving the OPTICS ordering byte-for-byte unchanged.
+		for ( std::size_t t = 0; t < b.size(); ++t ) {
+			CHECK( b_sq[t] == optics::detail::square_dist( pts[i], pts[b[t]] ) );
+		}
+	}
+	// The capability is modeled for double (where the reuse is exact) but not for float.
+	CHECK( ( optics::RadiusSearchWithDists<optics::NanoflannBackend<double, 3>, double, 3> ) );
+	CHECK( ( !optics::RadiusSearchWithDists<optics::NanoflannBackend<float, 3>, float, 3> ) );
+}
+
+
 #ifdef OPTICS_ENABLE_BOOST_RTREE
 // Only built when the optional Boost backend is enabled. Verifies that the Boost
 // R*-tree backend is interchangeable with nanoflann (issue #27): identical

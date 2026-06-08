@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <optional>
+#include <type_traits>
 #include <vector>
 
 // nanoflann is vendored third-party; silence its warnings (e.g. MSVC C4324/C4127)
@@ -55,6 +56,19 @@ concept NeighborSearch = requires(const B b, const std::array<T, Dim>& p, T r,
 template <class B, class T, std::size_t Dim>
 concept KnnCoreDist = requires(const B b, const std::array<T, Dim>& p, std::size_t k, T r) {
     b.knn_core_dist(p, k, r);
+};
+
+// Optional capability: a backend that returns each neighbor's SQUARED distance alongside
+// its index, reusing the distances the search already computed. Lets the ordering loop
+// skip recomputing those distances in the core-distance scan and the relaxation (issue
+// #55). Enabled only for double coordinates, where the backend's accumulated squared
+// distance is bit-identical to detail::square_dist (so the ordering is unchanged);
+// detected with `if constexpr`.
+template <class B, class T, std::size_t Dim>
+concept RadiusSearchWithDists = std::is_same_v<T, double> &&
+    requires(const B b, const std::array<T, Dim>& p, T r,
+             std::vector<std::size_t>& out, std::vector<double>& out_sq) {
+    b.radius_search_with_dists(p, r, out, out_sq);
 };
 
 namespace detail {
@@ -110,6 +124,25 @@ public:
         (void)index_.radiusSearch(p.data(), radius_sq, matches, params);  // count unused
         out.reserve(out.size() + matches.size());
         for (const auto& m : matches) out.push_back(m.first);
+    }
+
+    // Like radius_search, but also appends each neighbor's SQUARED distance to out_sq
+    // (parallel to out), reusing the distances nanoflann already computed during the
+    // search rather than recomputing them downstream (issue #55). Only meaningful for
+    // T == double, where m.second is bit-identical to detail::square_dist; the
+    // RadiusSearchWithDists concept restricts the fast path to that case.
+    void radius_search_with_dists(const Point& p, T r, std::vector<std::size_t>& out,
+                                  std::vector<double>& out_sq) const {
+        const T radius_sq = static_cast<T>(r) * static_cast<T>(r);
+        thread_local std::vector<nanoflann::ResultItem<std::size_t, T>> matches;
+        matches.clear();
+        nanoflann::SearchParameters params;
+        params.sorted = false;
+        params.eps = search_eps;
+        (void)index_.radiusSearch(p.data(), radius_sq, matches, params);
+        out.reserve(out.size() + matches.size());
+        out_sq.reserve(out_sq.size() + matches.size());
+        for (const auto& m : matches) { out.push_back(m.first); out_sq.push_back(static_cast<double>(m.second)); }
     }
 
     // Core-distance via a k-NN query: distance to the min_pts-th nearest point,

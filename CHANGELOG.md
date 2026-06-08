@@ -7,6 +7,14 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
 ## [Unreleased]
 
 ### Added
+- **Distance reuse on the exact OPTICS path** (#55): a new optional `RadiusSearchWithDists` backend capability
+  lets the ordering reuse the squared distances the neighbor search already computed, instead of recomputing
+  them in the core-distance scan *and* the relaxation. `NanoflannBackend` models it for `double` coordinates,
+  where its squared distance is bit-identical to `detail::square_dist`, so OPTICS orderings are byte-for-byte
+  unchanged; `float` and capability-less backends keep the recompute path. Detected with `if constexpr` — no
+  API change, automatic. On a dense 3-D cloud (n=24k, `optics_reuse_probe`) this cut the core-distance phase
+  ~30% and the relaxation ~23% (~12% off the ordering loop), with identical orderings. The `detail::optics_order`
+  driver gains a third (distance) provider; the recompute default is byte-identical to the previous inline call.
 - `optics::compute_soptics_reachability_dists` — **sOPTICS**, a scalable, approximate OPTICS via CEOs
   random projections (sDBSCAN/sOPTICS, Xu & Pham, NeurIPS 2024), reimplemented from the paper. Cosine
   metric (points are L2-normalized onto the unit sphere internally); returns the same
