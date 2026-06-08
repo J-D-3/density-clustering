@@ -152,6 +152,89 @@ py::dict hdbscan_py( const Array& arr, std::size_t min_cluster_size, std::size_t
     }
 }
 
+optics::Metric parse_metric( const std::string& s ) {
+    if ( s == "l2" || s == "L2" ) { return optics::Metric::L2; }
+    if ( s == "l1" || s == "L1" ) { return optics::Metric::L1; }
+    return optics::Metric::Cosine;
+}
+
+// --- shdbscan: scalable approximate HDBSCAN* (CEOs random-projection MST) ----------
+// Same labels/probabilities/n_clusters shape as hdbscan(), but approximate and
+// deterministic in `seed`; cosine metric by default (brightness-invariant), L2/L1 via
+// random-Fourier features. dedup is on (collapses bit-identical points).
+template <std::size_t Dim>
+py::dict shdbscan_impl( const Array& arr, std::size_t min_cluster_size, std::size_t min_samples,
+                        const std::string& method, unsigned seed, const std::string& metric,
+                        unsigned n_threads ) {
+    const auto pts = to_points<Dim>( arr );
+    const auto sel = ( method == "leaf" || method == "Leaf" ) ? optics::ClusterSelectionMethod::Leaf
+                                                              : optics::ClusterSelectionMethod::EOM;
+    const auto res = optics::shdbscan( pts, min_cluster_size, min_samples, /*epsilon*/ -1.0,
+                                       /*n_projections*/ 1024u, /*k*/ 0u, /*m*/ std::size_t( 0 ),
+                                       seed, n_threads, sel, /*allow_single_cluster*/ false,
+                                       parse_metric( metric ) );
+    py::array_t<long long> labels( static_cast<py::ssize_t>( res.labels.size() ) );
+    py::array_t<double> probs( static_cast<py::ssize_t>( res.probabilities.size() ) );
+    auto l = labels.mutable_unchecked<1>();
+    auto p = probs.mutable_unchecked<1>();
+    for ( std::size_t i = 0; i < res.labels.size(); ++i ) { l( static_cast<py::ssize_t>( i ) ) = res.labels[i]; }
+    for ( std::size_t i = 0; i < res.probabilities.size(); ++i ) { p( static_cast<py::ssize_t>( i ) ) = res.probabilities[i]; }
+    py::dict d;
+    d["labels"] = labels;
+    d["probabilities"] = probs;
+    d["n_clusters"] = static_cast<long long>( res.n_clusters );
+    return d;
+}
+
+py::dict shdbscan_py( const Array& arr, std::size_t min_cluster_size, std::size_t min_samples,
+                      const std::string& method, unsigned seed, const std::string& metric, unsigned n_threads ) {
+    switch ( check_dim( arr ) ) {
+        case 1: return shdbscan_impl<1>( arr, min_cluster_size, min_samples, method, seed, metric, n_threads );
+        case 2: return shdbscan_impl<2>( arr, min_cluster_size, min_samples, method, seed, metric, n_threads );
+        case 3: return shdbscan_impl<3>( arr, min_cluster_size, min_samples, method, seed, metric, n_threads );
+        case 4: return shdbscan_impl<4>( arr, min_cluster_size, min_samples, method, seed, metric, n_threads );
+        default: throw std::invalid_argument( "only 1..4 dimensions are supported" );
+    }
+}
+
+// --- soptics: scalable approximate OPTICS (CEOs) -> per-point labels ---------------
+// Computes the approximate reachability ordering, then extracts clusters by a flat
+// threshold cut (extract="threshold") or the hierarchical Xi method (extract="xi"),
+// dropping clusters below min_cluster_frac of the cloud as noise (-1). Deterministic
+// in `seed`; cosine metric by default.
+template <std::size_t Dim>
+py::array_t<long long> soptics_impl( const Array& arr, std::size_t min_pts, const std::string& extract,
+                                     double threshold, double chi, double epsilon, unsigned seed,
+                                     const std::string& metric, double min_cluster_frac, unsigned n_threads ) {
+    const auto pts = to_points<Dim>( arr );
+    const auto reach = optics::compute_soptics_reachability_dists(
+        pts, min_pts, epsilon, /*n_projections*/ 1024u, /*k*/ 0u, /*m*/ std::size_t( 0 ),
+        seed, n_threads, parse_metric( metric ) );
+    std::vector<std::vector<std::size_t>> clusters;
+    if ( extract == "xi" || extract == "Xi" ) {
+        const auto flat = optics::get_chi_clusters_flat( reach, chi, min_pts );
+        clusters = optics::get_cluster_indices( reach, flat );
+    } else {
+        const double t = ( threshold < 0.0 ) ? optics::detail::default_threshold( reach ) : threshold;
+        clusters = optics::get_cluster_indices( reach, t );
+    }
+    const std::size_t min_size =
+        std::max<std::size_t>( 1, static_cast<std::size_t>( min_cluster_frac * static_cast<double>( pts.size() ) ) );
+    return to_label_array( optics::io::cluster_labels( pts.size(), clusters, min_size ) );
+}
+
+py::array_t<long long> soptics_py( const Array& arr, std::size_t min_pts, const std::string& extract,
+                                   double threshold, double chi, double epsilon, unsigned seed,
+                                   const std::string& metric, double min_cluster_frac, unsigned n_threads ) {
+    switch ( check_dim( arr ) ) {
+        case 1: return soptics_impl<1>( arr, min_pts, extract, threshold, chi, epsilon, seed, metric, min_cluster_frac, n_threads );
+        case 2: return soptics_impl<2>( arr, min_pts, extract, threshold, chi, epsilon, seed, metric, min_cluster_frac, n_threads );
+        case 3: return soptics_impl<3>( arr, min_pts, extract, threshold, chi, epsilon, seed, metric, min_cluster_frac, n_threads );
+        case 4: return soptics_impl<4>( arr, min_pts, extract, threshold, chi, epsilon, seed, metric, min_cluster_frac, n_threads );
+        default: throw std::invalid_argument( "only 1..4 dimensions are supported" );
+    }
+}
+
 }  // namespace
 
 PYBIND11_MODULE( optics_py, m ) {
@@ -189,4 +272,24 @@ PYBIND11_MODULE( optics_py, m ) {
            "(on by default; the big win on flat-color data). Returns a dict with 'labels' "
            "(per-point int, -1 = noise), 'probabilities' ([0,1] membership strength), and "
            "'n_clusters'." );
+
+    m.def( "shdbscan", &shdbscan_py,
+           py::arg( "points" ), py::arg( "min_cluster_size" ), py::arg( "min_samples" ) = 0,
+           py::arg( "method" ) = "eom", py::arg( "seed" ) = 42, py::arg( "metric" ) = "cosine",
+           py::arg( "n_threads" ) = 0,
+           "Scalable, approximate HDBSCAN* via CEOs random projections. Same return shape as "
+           "hdbscan (dict: 'labels' -1=noise, 'probabilities', 'n_clusters') but approximate and "
+           "deterministic in 'seed'. metric is 'cosine' (default, brightness-invariant), 'l2', or "
+           "'l1'. Dedups bit-identical points internally." );
+
+    m.def( "soptics", &soptics_py,
+           py::arg( "points" ), py::arg( "min_pts" ), py::arg( "extract" ) = "threshold",
+           py::arg( "threshold" ) = -1.0, py::arg( "chi" ) = 0.05, py::arg( "epsilon" ) = -1.0,
+           py::arg( "seed" ) = 42, py::arg( "metric" ) = "cosine", py::arg( "min_cluster_frac" ) = 0.0,
+           py::arg( "n_threads" ) = 0,
+           "Scalable, approximate OPTICS via CEOs random projections. Computes the reachability "
+           "ordering, then extracts clusters by a flat cut (extract='threshold', threshold<0 = "
+           "educated default) or the hierarchical Xi method (extract='xi', steepness 'chi'). "
+           "Returns per-point int labels (-1 = noise); clusters below min_cluster_frac of the cloud "
+           "are dropped to noise. Deterministic in 'seed'; metric 'cosine'/'l2'/'l1'." );
 }

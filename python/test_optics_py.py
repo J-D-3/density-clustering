@@ -49,13 +49,31 @@ def main():
     assert probs.min() >= 0.0 and probs.max() <= 1.0, "probabilities must lie in [0, 1]"
     assert optics_py.hdbscan(pts, min_cluster_size=20, method="leaf")["n_clusters"] >= 1
 
+    # sHDBSCAN (scalable approximate HDBSCAN*) -> same dict shape; deterministic in seed.
+    # Use metric='l2' so the Euclidean blobs are recovered (cosine clusters by direction).
+    sh = optics_py.shdbscan(pts, min_cluster_size=20, metric="l2")
+    assert set(sh.keys()) == {"labels", "probabilities", "n_clusters"}, sh.keys()
+    assert sh["labels"].shape == (len(pts),)
+    assert np.array_equal(optics_py.shdbscan(pts, min_cluster_size=20, metric="l2", seed=1)["labels"],
+                          optics_py.shdbscan(pts, min_cluster_size=20, metric="l2", seed=1)["labels"]), \
+        "shdbscan must be deterministic in seed"
+
+    # sOPTICS (scalable approximate OPTICS) -> per-point labels via threshold or Xi extraction.
+    so = optics_py.soptics(pts, min_pts=8, extract="xi", metric="l2")
+    assert so.shape == (len(pts),)
+    assert optics_py.soptics(pts, min_pts=8, extract="threshold", metric="l2").shape == (len(pts),)
+    assert np.array_equal(optics_py.soptics(pts, min_pts=8, seed=1, metric="l2"),
+                          optics_py.soptics(pts, min_pts=8, seed=1, metric="l2")), \
+        "soptics must be deterministic in seed"
+
     # 1/3/4-D smoke (dispatch coverage).
     for dim in (1, 3, 4):
         p = rng.normal(0, 1.0, size=(60, dim)) + rng.integers(0, 3, size=(60, 1)) * 30.0
         out = optics_py.cluster_threshold(p, min_pts=5, threshold=5.0)
         assert out.shape == (60,)
 
-    print(f"optics_py OK: cluster_threshold -> {n_clusters} clusters; reachability + xi + hdbscan + 1/3/4-D dispatch pass")
+    print(f"optics_py OK: cluster_threshold -> {n_clusters} clusters; "
+          "reachability + xi + hdbscan + shdbscan + soptics + 1/3/4-D dispatch pass")
 
 
 if __name__ == "__main__":

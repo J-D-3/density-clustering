@@ -39,10 +39,20 @@ order = optics_py.compute_reachability(pts, min_pts=10)
 # membership strength), 'n_clusters'. method = 'eom' (default) or 'leaf'.
 res = optics_py.hdbscan(pts, min_cluster_size=15)
 labels_h, probs, k = res["labels"], res["probabilities"], res["n_clusters"]
+
+# sHDBSCAN -> scalable, approximate HDBSCAN* (CEOs random projections). Same dict shape
+# as hdbscan, deterministic in 'seed'. Cosine metric by default (brightness-invariant);
+# 'l2'/'l1' recover Euclidean/Manhattan structure.
+res_s = optics_py.shdbscan(pts, min_cluster_size=15, metric="l2", seed=42)
+
+# sOPTICS -> scalable, approximate OPTICS. Returns per-point labels (-1 = noise) via a
+# flat cut (extract='threshold') or the hierarchical Xi method (extract='xi').
+labels_so = optics_py.soptics(pts, min_pts=10, extract="xi", chi=0.05, metric="l2")
 ```
 
-`hdbscan` deduplicates bit-identical points by default (`dedup=True`) — the big win on
-flat-color/quantized data. The exposed functions cover plain OPTICS + HDBSCAN\*; sOPTICS
-and sHDBSCAN live in the C++ headers but are not bound yet.
+`hdbscan`/`shdbscan` deduplicate bit-identical points by default — the big win on
+flat-color/quantized data. The approximate variants (`shdbscan`/`soptics`) are randomized
+but **deterministic in `seed`**. The binding now covers OPTICS, HDBSCAN\*, sHDBSCAN, and
+sOPTICS.
 
 Smoke test: `python python/test_optics_py.py build-py/python/Release`.

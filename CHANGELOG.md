@@ -7,6 +7,15 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
 ## [Unreleased]
 
 ### Added
+- **Python bindings for sHDBSCAN and sOPTICS** (#52, #50, #23): `optics_py.shdbscan(points,
+  min_cluster_size, min_samples=0, method="eom", seed=42, metric="cosine", n_threads=0)` exposes
+  the scalable approximate HDBSCAN\* (same dict return as `hdbscan`); `optics_py.soptics(points,
+  min_pts, extract="threshold", threshold=-1, chi=0.05, epsilon=-1, seed=42, metric="cosine",
+  min_cluster_frac=0.0, n_threads=0)` exposes approximate OPTICS, composing
+  `compute_soptics_reachability_dists` with a flat-threshold or hierarchical-Xi extraction →
+  per-point labels (-1 = noise). Both are randomized but **deterministic in `seed`**; `metric` is
+  `"cosine"` (default), `"l2"`, or `"l1"`. `test_optics_py.py` covers both (shape + seed
+  determinism). The binding now surfaces OPTICS, HDBSCAN\*, sHDBSCAN, and sOPTICS to NumPy.
 - **Python binding for HDBSCAN\*** (#52, #23): `optics_py.hdbscan(points, min_cluster_size,
   min_samples = 0, method = "eom", allow_single_cluster = False, n_threads = 0, dedup = True)`
   exposes the parameter-light density clusterer to NumPy clouds (1/2/3/4-D, same dispatch as the
