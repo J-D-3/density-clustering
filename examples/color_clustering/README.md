@@ -82,6 +82,31 @@ dense color clouds keeps memory flat (no giant neighbor cache — Precompute wou
 ~19 GB at 100k px) *and* runs ~30% faster, so the cost above is **time, not memory**.
 The full size/mode/backend analysis is in [`perf/README.md`](../../perf/README.md).
 
+### Shrinking the cloud before clustering (the big win for images)
+
+A flat-color region wastes work: thousands of **identical** pixels each pay the full
+per-point cost yet add no information. Three preprocessing levers, cheapest/safest first:
+
+1. **Deduplicate (lossless, on by default).** `optics_color` now collapses identical
+   pixels into **unique colors carrying a weight** (count) and runs *weight-aware*
+   OPTICS on the small unique cloud (issue #46), then expands the result back per-pixel.
+   The clustering is **identical** to clustering every pixel — just far faster, because a
+   region of N identical pixels becomes a single point. (`optics::deduplicate` /
+   `optics::expand_clusters_to_original`; the one-call `optics::cluster_threshold` /
+   `optics::extract_xi` do this internally.) Typical photo collapse ≈ 8–10×; on
+   continuous-tone data with **no** exact duplicates it is a no-op (nothing to merge).
+2. **Voxel quantize (lossy, opt-in).** `optics::quantize(points, bin)` snaps colors to a
+   grid first, so *near*-identical colors (JPEG/DCT artifacts, gradients) also merge —
+   pushing the collapse to ~30× at `bin=4`, ~120× at `bin=8`. It perturbs cluster
+   boundaries (it changes colors), so treat `bin` as a quality/speed knob:
+   `cluster(quantize(points, 4))`.
+3. **Downscale (`--max-dim`).** Spatial reduction; orthogonal to the two above.
+
+> **Not recommended:** *mean-shift* as a pre-pass — it is itself an O(n²) mode-seeking
+> clusterer, i.e. slower than the problem it would feed. *Random subsampling* distorts the
+> very local density OPTICS measures (it changes core-distance / reachability), so prefer
+> dedup + quantize + downscale, which preserve density.
+
 `compare_kmeans.py` times the OPTICS ordering against scikit-learn k-means (told
 the cluster count OPTICS found) on the same pixels (needs `pip install scikit-learn`):
 
