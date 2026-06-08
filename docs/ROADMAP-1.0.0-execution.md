@@ -127,9 +127,57 @@ Update it to:
    methods — metric matched per §9.2). Exits non-zero on failure so it gates a run/CI. Verified: all
    six engines pass (cosine methods hit ARI 1.00 on angular data).
 
+### B1.7 — Reproducibility & updating the matrix when infrastructure changes
+
+A core requirement: the study (or parts of it) must be **re-runnable and updatable** when the
+algorithmic infrastructure changes later (a new backend, a tuned default, a new algorithm), so the
+matrix stays a living reference rather than a one-off. The mechanisms, all in place:
+
+- **Determinism.** Every dataset is byte-reproducible from `(n,d,k,density,noise,shape,seed)`
+  (`gen_dataset.py`); `optics_matrix` and the cosine methods are deterministic in `--seed`. Re-running
+  a cell on unchanged code reproduces it exactly.
+- **Provenance per row.** Each tidy row records the **git commit**, thread count, and timestamp — so
+  results are tagged with the code version that produced them, and mixed-version rows are
+  distinguishable.
+- **Add an engine/algorithm in one place.** The engine registry (`OURS_ENGINES` / `SK_ENGINES` in
+  `run_matrix.py`) is the single seam: append one `(engine, algo, metric_space)` tuple (and, for an
+  `ours-*` engine, a `--algo` branch in `optics_matrix.cpp`). Gating, scoring, the tidy CSV, and the
+  analysis need no change. A new D-decision (e.g. a future D6) is one row in the design table + one
+  `crossover_table(...)` call.
+- **Re-run only what changed.** `run_matrix.py --engines <names> --refresh` drops those engines'
+  checkpoint rows and re-appends fresh ones (newer commit/timestamp); other engines and cells are
+  untouched. `analyze_matrix.py` keeps the **latest row per measurement by timestamp**, so the
+  refreshed results supersede the stale ones without re-running the whole grid.
+- **Resumable.** Killed runs continue with `--resume`; completed `(cell, engine, config, rep)` groups
+  are skipped, and dataset generation is skipped when nothing is left to run for a cell.
+
+So updating the matrix after, say, changing the default ε estimator or adding a backend is: change the
+code → `run_matrix.py --engines ours-optics --refresh` (only the affected engine) → `analyze_matrix.py`
+(latest wins) → fold the new tables in. No full re-run required.
+
 ### B2 — Run (design §10 phasing)
 
-- **Phase 0 — prerequisites:** A1 ✅; B1 infra green; correctness gate passing.
+**Phase-0 readiness check (all green except the two deliberately-deferred items):**
+
+| Prerequisite | State |
+|---|---|
+| All gated features merged (#46/#47/#50–#52/#54–#55/#58) | ✅ on master |
+| Generator with labels + density + shapes (`gen_dataset.py`) | ✅ B1.1 |
+| Per-cell executor over the dim spine (`optics_matrix`) | ✅ B1.2 |
+| Orchestrator: gating, timeouts, checkpoint/resume, provenance (`run_matrix.py`) | ✅ B1.3 |
+| Analysis → D1–D5 tables (`analyze_matrix.py`) | ✅ B1.4 |
+| Correctness gate (`correctness_gate.py`) | ✅ B1.6 |
+| Reproducible/extensible update path (registry, `--engines/--refresh`, latest-by-timestamp) | ✅ B1.7 |
+| sklearn engines hard-timeout-isolated (`sk_engine.py`) | ✅ |
+| **1e7 scaling level** (streaming generator/CSV) | ⏳ optional — scaling tier capped at 1e6 |
+| **ELKI / NinhPham-sDbscan adapters** (Docker repro env) | ⏳ deferred past 1.0.0 |
+
+The pipeline runs end-to-end today (`gen → gate → run → analyze`) on the `pilot` tier; the `scaling`
+and `dim` tiers are defined and feasibility-gated. **B2 itself (the full multi-day run on the
+reference machine) is the remaining human-initiated step** — it is a deliberate, long, resource-heavy
+activity, not something to launch incidentally.
+
+- **Phase 0 — prerequisites:** A1 ✅; B1 infra green (table above); correctness gate passing ✅.
 - **Phase 1 — pilot:** small-n cost models; finalize feasibility caps; publish cell count +
   wall-clock budget into the design doc §3c.
 - **Phase 2 — full run:** Tiers A–E + Latin-hypercube fill, checkpointed, in-container, reporting ≥3

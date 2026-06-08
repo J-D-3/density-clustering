@@ -40,6 +40,7 @@ and `cluster_csv` reads them).
 | `run_matrix.py` | **(matrix)** Orchestrator: expand a tier → cells, generate each once, run every engine on the same CSV, score ARI/NMI/Rand, append a tidy long-format CSV. Checkpoint/resume, feasibility-gated, full provenance. Needs the `optics_matrix` harness. |
 | `correctness_gate.py` | **(matrix)** Pre-flight: assert every engine recovers clean, well-separated clusters (ARI≈1) before any timing — catches a broken config. Exits non-zero on failure (CI/run gate). |
 | `analyze_matrix.py` | **(matrix)** Turn the tidy CSV into the D1–D5 decision tables, the speedup-vs-sklearn-OPTICS table, and a quality table (Markdown); honestly flags decisions that still need an unswept axis. |
+| `sk_engine.py` | **(matrix)** scikit-learn per-cell worker (OPTICS/HDBSCAN/DBSCAN/KMeans) invoked by `run_matrix.py` as a subprocess so it can be hard-timeout-killed (a sklearn `fit` can't be interrupted in-process). Not run directly. |
 
 ```sh
 cmake --build --preset msvc --target optics_quality_compare
@@ -70,6 +71,20 @@ python tools/analyze_matrix.py results/matrix.csv --out results/report.md
 Tiers: `pilot` (tiny end-to-end smoke), `scaling` (n-spine), `dim` (d-spine) — `--list-tiers` to
 see cell counts. ELKI / NinhPham-sDbscan are **deferred past 1.0.0** to a Docker repro env (see
 below). `results/` and `data/` are gitignored (reproducible from these scripts).
+
+**Updating the matrix after an infrastructure change** (new backend, tuned default, new algorithm):
+the run is built to be re-run in part, not wholesale. Each row records the git commit; to refresh
+just the affected engine after changing its code, re-run only it and let the analysis take the
+newest rows:
+
+```sh
+python tools/run_matrix.py --out results/matrix.csv --engines ours-optics --refresh
+python tools/analyze_matrix.py results/matrix.csv      # keeps the latest row per measurement
+```
+
+To add an engine/algorithm, append one tuple to the engine registry in `run_matrix.py`
+(`OURS_ENGINES` / `SK_ENGINES`) — and, for an `ours-*` engine, an `--algo` branch in
+`optics_matrix.cpp`. Gating, scoring, the tidy CSV, and the analysis are unchanged.
 
 ## Comparing against mhahsler/dbscan (R)
 
