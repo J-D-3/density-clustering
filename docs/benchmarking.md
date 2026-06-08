@@ -59,8 +59,8 @@ These are the things that, if ignored, produce misleading numbers:
 | **ours** (OPTICS, sOPTICS) | `optics_quality_compare` (C++) | built here |
 | **scikit-learn** (OPTICS xi, HDBSCAN) | `quality_benchmark.py` (Python) | runs here |
 | **mhahsler/dbscan** (R; ANN kd-tree OPTICS) | `run_dbscan_r.R` via `quality_benchmark.py` | runs here (needs R + `dbscan`) |
-| **ELKI** (Java; OPTICSXi/FastOPTICS/HDBSCAN\*) | manual, same CSVs | not run (no java); `tools/README.md` |
-| **NinhPham/sDbscan** (C++; sOPTICS competitor) | manual, build from source | not run; `tools/README.md` |
+| **ELKI** (Java; OPTICSXi/FastOPTICS/HDBSCAN\*) | manual, same CSVs | **deferred past 1.0.0** (no JVM); matrix Docker env (#59) |
+| **NinhPham/sDbscan** (C++; sOPTICS competitor) | manual, build from source | **deferred past 1.0.0**; matrix Docker env (#59) |
 
 R-sandbox note: if a sandboxed R install hides the package from a subprocess, set `R_LIBS_USER` to
 the library holding `dbscan` (`Rscript -e "cat(dirname(find.package('dbscan')))"`). The harness
@@ -91,10 +91,14 @@ probes availability and skips the column cleanly otherwise.
   defaults to `epsilon_estimation_knee` across `compute_reachability_dists` / `cluster_threshold` /
   `extract_xi` (falls back to uniform for non-`KnnCoreDist` backends and degenerate inputs). Pass an
   explicit `epsilon` for the uniform behavior.
-- **sOPTICS 16-D quality dip** — cos-blobs-16d ARI 0.57 vs ~0.82 for the exact methods; check
-  CEOs params (D / k / m) and curse-of-dimensionality.
+- ~~**sOPTICS 16-D quality dip** — cos-blobs-16d ARI 0.57 vs ~0.82~~ **ADDRESSED** (#58): the
+  data-scaled sOPTICS auto-epsilon closes the dip; re-confirm quantitatively in the matrix Tier C/D.
 - **Reproduce the dbscan JSS benchmark** (replication script) to validate our setup against
   *published* numbers, not just same-machine ratios.
-- **ELKI + sDbscan columns** — need their runtimes; ELKI especially is the FastOPTICS/sOPTICS parity
-  reference (#53).
-- **FHT structured projections** for sOPTICS — would lower its small-scale projection overhead.
+- **ELKI + sDbscan columns — DEFERRED past 1.0.0** (decided 2026-06-08). 1.0.0 ships with the
+  scikit-learn + mhahsler/dbscan (R) comparisons only. ELKI needs a JVM and NinhPham/sDbscan needs
+  building from source — both are environment-fragile, so they are pushed to the **benchmark matrix's
+  Docker repro env** (#59 / `ROADMAP-1.0.0-execution.md` §B1.5) rather than the local dev sandbox.
+  ELKI remains the FastOPTICS/sOPTICS parity reference when it lands (#53, deferred).
+- ~~**FHT structured projections** for sOPTICS~~ **DONE** (#58): opt-in `SopticsProjection::Structured`
+  (`x → H D₃ H D₂ H D₁ x`, `detail/hadamard.hpp`); ~1.2–1.4× at ≥ 64-D.
