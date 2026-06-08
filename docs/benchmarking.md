@@ -4,6 +4,12 @@ How we measure clustering **quality** and **speed**, against which datasets and 
 caveats that make a comparison fair. Pairs with `tools/README.md` (how to run) and the 1.0.0
 benchmark trackers (#53 CPU-speed comparisons, #54 quality harness).
 
+> **The 1.0.0 reference study.** This file describes the *current, ad-hoc* benchmarks. The plan to
+> consolidate them into one large reproducible matrix — run once the 1.0.0 features land, to pick the
+> library's data-dependent defaults and serve as the single citable comparison — lives in
+> [`ROADMAP-1.0.0-benchmark-matrix.md`](ROADMAP-1.0.0-benchmark-matrix.md). The comparability rules
+> below are its fairness contract.
+
 ## Datasets
 
 | group | what | source | ground truth? |
