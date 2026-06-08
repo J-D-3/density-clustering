@@ -1692,6 +1692,34 @@ TEST_CASE("fast Walsh-Hadamard transform (#58 structured projections)") {
 }
 
 
+TEST_CASE("sOPTICS structured projections (#58): agrees with exact OPTICS; seed-deterministic") {
+	auto pts = optics::testdata::make_blobs<double, 3>( 5, 120, 30.0, 1.0, 321u );
+	for ( auto& p : pts ) {  // cosine metric: onto the unit sphere
+		const double nrm = std::sqrt( p[0] * p[0] + p[1] * p[1] + p[2] * p[2] );
+		if ( nrm > 0.0 ) { for ( auto& c : p ) { c /= nrm; } }
+	}
+	const std::size_t n = pts.size();
+	const std::size_t min_pts = 6;
+	const double eps = 0.3;
+
+	const auto exact = optics::compute_reachability_dists( pts, min_pts, eps );
+	const auto structured = optics::compute_soptics_reachability_dists(
+		pts, min_pts, eps, 512u, 20u, std::size_t{ 40 }, 7u, 0u, optics::Metric::Cosine, 0.0,
+		std::vector<std::size_t>{}, optics::SopticsProjection::Structured );
+	check_ordering_invariants( structured, n );
+
+	const double thr = 0.5 * eps;
+	const auto la = labels_from_clusters( n, optics::get_cluster_indices( exact, thr ) );
+	const auto lb = labels_from_clusters( n, optics::get_cluster_indices( structured, thr ) );
+	CHECK( rand_index( la, lb ) > 0.9 );  // structured spinners preserve the clustering
+
+	const auto again = optics::compute_soptics_reachability_dists(
+		pts, min_pts, eps, 512u, 20u, std::size_t{ 40 }, 7u, 0u, optics::Metric::Cosine, 0.0,
+		std::vector<std::size_t>{}, optics::SopticsProjection::Structured );
+	CHECK( ( structured == again ) );  // deterministic in seed
+}
+
+
 #ifdef OPTICS_ENABLE_BOOST_RTREE
 // Only built when the optional Boost backend is enabled. Verifies that the Boost
 // R*-tree backend is interchangeable with nanoflann (issue #27): identical
