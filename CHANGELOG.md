@@ -7,6 +7,21 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
 ## [Unreleased]
 
 ### Added
+- **HDBSCAN\*** (#52): a new density-based clusterer that needs no `epsilon`/threshold — just
+  `min_cluster_size` (plus an optional density smoother `min_samples`). New header
+  `include/optics/hdbscan.hpp` exposes `optics::hdbscan(points, min_cluster_size, min_samples = 0,
+  method = EOM, allow_single_cluster = false, n_threads = 0)` returning an `HdbscanResult`
+  (per-point `labels` with `-1` for noise, `probabilities` membership strengths, and `n_clusters`).
+  It builds the **mutual-reachability** MST (`d_mreach(a,b) = max(core_k(a), core_k(b), d(a,b))`,
+  symmetric — unlike OPTICS's directed reachability), condenses the single-linkage hierarchy by
+  `min_cluster_size`, and extracts the most persistent clusters by **Excess of Mass** (default) or
+  the condensed-tree **leaves** (`ClusterSelectionMethod::Leaf`). Core distances reuse the backend's
+  `knn_core_dist` (the same quantity OPTICS computes); the MST→condense→stability→label stages are
+  metric- and MST-agnostic, so a faster/approximate MST can feed the same extractor later. This first
+  cut uses an **exact dense-Prim MST** (`O(n²)` time, `O(n)` memory) — correct and simple, suited to
+  small/medium `n`; a sub-quadratic MST (Borůvka, or the sOPTICS/CEOs graph → "sHDBSCAN") is queued as
+  a #52 follow-up. Reimplemented from the papers (Campello/Moulavi/Sander 2013; McInnes & Healy 2017),
+  no third-party code. `min_samples` is self-inclusive (matches `sklearn.cluster.HDBSCAN`).
 - **Structured (FHT spinner) projections for sOPTICS** (#58, opt-in): `SopticsProjection::Structured`
   replaces the Gaussian CEOs projection (`O(D·Dim)` per point) with random spinners
   `x → H D₃ H D₂ H D₁ x` (sign-flip + fast Walsh-Hadamard transform, `O(D·log Dim)`; new
