@@ -7,6 +7,50 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
 ## [Unreleased]
 
 ### Added
+- **HDBSCAN\*** (#52): a new density-based clusterer that needs no `epsilon`/threshold — just
+  `min_cluster_size` (plus an optional density smoother `min_samples`). New header
+  `include/optics/hdbscan.hpp` exposes `optics::hdbscan(points, min_cluster_size, min_samples = 0,
+  method = EOM, allow_single_cluster = false, n_threads = 0)` returning an `HdbscanResult`
+  (per-point `labels` with `-1` for noise, `probabilities` membership strengths, and `n_clusters`).
+  It builds the **mutual-reachability** MST (`d_mreach(a,b) = max(core_k(a), core_k(b), d(a,b))`,
+  symmetric — unlike OPTICS's directed reachability), condenses the single-linkage hierarchy by
+  `min_cluster_size`, and extracts the most persistent clusters by **Excess of Mass** (default) or
+  the condensed-tree **leaves** (`ClusterSelectionMethod::Leaf`). Core distances reuse the backend's
+  `knn_core_dist` (the same quantity OPTICS computes); the MST→condense→stability→label stages are
+  metric- and MST-agnostic, so a faster/approximate MST can feed the same extractor later. This first
+  cut uses an **exact dense-Prim MST** (`O(n²)` time, `O(n)` memory) — correct and simple, suited to
+  small/medium `n`; a sub-quadratic MST (Borůvka, or the sOPTICS/CEOs graph → "sHDBSCAN") is queued as
+  a #52 follow-up. Reimplemented from the papers (Campello/Moulavi/Sander 2013; McInnes & Healy 2017),
+  no third-party code. `min_samples` is self-inclusive (matches `sklearn.cluster.HDBSCAN`).
+- **sHDBSCAN** (#52, the first follow-up): `optics::shdbscan(...)` is a scalable, **approximate**
+  HDBSCAN\* that swaps the exact dense-Prim MST for an approximate mutual-reachability MST built from
+  the same **CEOs random-projection neighbor graph** sOPTICS uses (Kruskal over the sparse candidate
+  edges; disconnected components are joined above all real edges, so well-separated clusters split at
+  the top). It then runs the **identical** condense/stability/extraction pipeline — the new
+  `detail::extract_from_mst` is shared verbatim with exact `hdbscan()`, the concrete payoff of keeping
+  steps 4–6 MST-agnostic. Metric is **cosine** (points L2-normalized onto the unit sphere); `L2`/`L1`
+  go through the same random-Fourier-feature embedding as `compute_soptics_reachability_dists`. Output
+  is randomized but **deterministic in `seed`**; on angular 3-D blobs it matched exact `hdbscan()`
+  labelling (Rand ≈ 1.0) and recovered the planted partition (Rand ≈ 0.99). This is the "sHDBSCAN"
+  combine-path the #52 plan anticipated; a dual-tree-Borůvka exact fast MST remains future work.
+- **Weighted / dedup HDBSCAN\* and sHDBSCAN** (#52 × #46): both `hdbscan()` and `shdbscan()` gained a
+  trailing `dedup = true` (auto-collapse bit-identical points to unique weighted points, cluster those,
+  expand labels back to the originals — the same partition, but the O(n²) MST shrinks to the unique
+  count) and an explicit `weights` argument (scikit-learn `sample_weight`: each point counts as
+  `weights[i]` originals for the core distance, cluster size and stability; non-empty `weights`
+  bypasses dedup). Threaded through the whole pipeline — weighted core distance
+  (`knn_core_dist_weighted` exact / cumulative-weight k-th approximate), weighted linkage/condense
+  sizes (so `min_cluster_size` is in weight units), and weighted stability. All-ones weights reproduce
+  the unweighted result bit-for-bit, and **weighted-on-dedup equals unweighted-on-full exactly
+  (Rand = 1.0)** for exact `hdbscan()` (≈ 0.91 for approximate `shdbscan()`); clouds with no duplicates
+  fall through unchanged. Needs a backend modeling `KnnCoreDistWeighted` (NanoflannBackend does).
+- **HDBSCAN\* cross-check harness** (#52): new `hdbscan_compare` C++ label emitter +
+  `tools/hdbscan_benchmark.py` score our `hdbscan`/`shdbscan` against `sklearn.cluster.HDBSCAN` and
+  ground truth (ARI/NMI/Rand) with a direct **ours-vs-sklearn label-agreement** column. **Measured: our
+  exact `hdbscan` matches scikit-learn at ARI 0.99–1.00 across all 13 datasets** (Euclidean 2-D toys,
+  cosine high-D clouds, Franti shape sets), validating the reimplementation; `shdbscan` (cosine) matches
+  on the cosine clouds and is weaker on Euclidean toys, as expected. `min_samples` is self-inclusive in
+  both libraries and passed identically. See `tools/README.md`.
 - **Structured (FHT spinner) projections for sOPTICS** (#58, opt-in): `SopticsProjection::Structured`
   replaces the Gaussian CEOs projection (`O(D·Dim)` per point) with random spinners
   `x → H D₃ H D₂ H D₁ x` (sign-flip + fast Walsh-Hadamard transform, `O(D·log Dim)`; new

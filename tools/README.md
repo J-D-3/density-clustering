@@ -33,6 +33,7 @@ and `cluster_csv` reads them).
 | `timing_compare.py` | Time the internal backends (nanoflann / approx / Boost) vs `sklearn.cluster.OPTICS` across cases; needs the `optics_backend_compare` harness. |
 | `timing_images.py` | Color-clustering runtime on RGB images: internal backends vs scikit-learn OPTICS / DBSCAN / KMeans on the same sampled pixel cloud. |
 | `quality_benchmark.py` | Score OPTICS + sOPTICS (ours), scikit-learn OPTICS + HDBSCAN, **and mhahsler/dbscan (R)** against ground truth (ARI / NMI / Rand) + a timing table; needs the `optics_quality_compare` harness (and, for the dbscan-R column, R + the `dbscan` package). |
+| `hdbscan_benchmark.py` | Cross-check our HDBSCAN\* + sHDBSCAN against `sklearn.cluster.HDBSCAN` and ground truth (ARI / NMI / Rand) plus a direct **ours-vs-sklearn label-agreement** column (the correctness signal for #52); needs the `hdbscan_compare` harness. `min_samples` is self-inclusive in both and passed identically. |
 | `fetch_datasets.py` | Download Franti's clustering benchmark "shape sets" (Aggregation, Compound, spiral, R15, jain, flame, D31) into `data/franti/` as coords + ground-truth CSVs — third-party data with published results (please cite Franti et al.). |
 | `run_dbscan_r.R` | Run mhahsler/dbscan's OPTICS+Xi on a coords CSV → predicted labels + timing (invoked by `quality_benchmark.py`; needs R + `dbscan`). |
 

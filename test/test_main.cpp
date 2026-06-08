@@ -8,6 +8,7 @@
 #include "third_party/doctest.h"
 
 #include "../include/optics/optics.hpp"
+#include "../include/optics/hdbscan.hpp"
 #include "../include/optics/testdata.hpp"
 #include "../include/optics/io.hpp"
 #include "../include/optics/detail/hadamard.hpp"
@@ -1761,6 +1762,246 @@ TEST_CASE("sOPTICS auto-eps recovers high-D Xi clusters (#58 16-D dip)") {
 	// Auto-eps sOPTICS Xi tracks exact OPTICS Xi; the old eps=2.0 default does markedly worse.
 	CHECK( rand_index( exact_xi, auto_xi ) > 0.9 );
 	CHECK( rand_index( exact_xi, auto_xi ) > rand_index( exact_xi, old_xi ) );
+}
+
+
+//=== HDBSCAN* (issue #52) ===================================================
+
+static std::vector<long long> to_ll( const std::vector<int>& v ) {
+	return std::vector<long long>( v.begin(), v.end() );
+}
+
+TEST_CASE("hdbscan: separated blobs -> exact cluster count, agrees with ground truth") {
+	const std::vector<std::array<double, 2>> centers = { { 0, 0 }, { 100, 0 }, { 50, 100 } };
+	const std::size_t per = 30;
+	const auto pts = optics::testdata::gaussian_blobs<double, 2>( centers, per, 1.5 );
+	const std::size_t n = pts.size();
+
+	const auto res = optics::hdbscan( pts, 5 );
+	REQUIRE( res.labels.size() == n );
+	REQUIRE( res.probabilities.size() == n );
+	CHECK( res.n_clusters == 3 );
+
+	// Recovers the planted partition (gaussian_blobs lays out blob by blob).
+	std::vector<long long> truth( n );
+	for ( std::size_t i = 0; i < n; ++i ) { truth[i] = static_cast<long long>( i / per ); }
+	CHECK( rand_index( to_ll( res.labels ), truth ) > 0.95 );
+
+	// Probabilities are a valid [0,1] membership; clustered points carry positive strength.
+	for ( std::size_t i = 0; i < n; ++i ) {
+		CHECK( res.probabilities[i] >= 0.0 );
+		CHECK( res.probabilities[i] <= 1.0 );
+		if ( res.labels[i] < 0 ) { CHECK( res.probabilities[i] == 0.0 ); }
+	}
+
+	// Deterministic: identical input => identical labelling.
+	const auto again = optics::hdbscan( pts, 5 );
+	CHECK( ( res.labels == again.labels ) );
+}
+
+
+TEST_CASE("hdbscan: far-flung points are labelled noise") {
+	const std::vector<std::array<double, 2>> centers = { { 0, 0 }, { 100, 0 } };
+	auto pts = optics::testdata::gaussian_blobs<double, 2>( centers, 30, 1.0 );
+	const std::size_t n_clustered = pts.size();
+	// Three isolated outliers, each alone in a vast empty region.
+	pts.push_back( { 500, 500 } );
+	pts.push_back( { -500, 500 } );
+	pts.push_back( { 500, -500 } );
+
+	const auto res = optics::hdbscan( pts, 5 );
+	CHECK( res.n_clusters == 2 );
+	for ( std::size_t i = n_clustered; i < pts.size(); ++i ) {
+		CHECK( res.labels[i] == -1 );          // outliers are noise
+		CHECK( res.probabilities[i] == 0.0 );
+	}
+}
+
+
+TEST_CASE("hdbscan: allow_single_cluster toggles the trivial one-cluster answer") {
+	const std::vector<std::array<double, 2>> centers = { { 0, 0 } };
+	const auto pts = optics::testdata::gaussian_blobs<double, 2>( centers, 40, 1.0 );
+	const std::size_t n = pts.size();
+
+	// min_cluster_size == n: no split ever leaves min_cluster_size on both sides, so the only
+	// cluster is the root. By default the root is suppressed (=> all noise); allow_single keeps it.
+	const auto suppressed = optics::hdbscan( pts, n, 5, optics::ClusterSelectionMethod::EOM, false );
+	CHECK( suppressed.n_clusters == 0 );
+	for ( const int l : suppressed.labels ) { CHECK( l == -1 ); }
+
+	const auto single = optics::hdbscan( pts, n, 5, optics::ClusterSelectionMethod::EOM, true );
+	CHECK( single.n_clusters == 1 );
+	for ( const int l : single.labels ) { CHECK( l == 0 ); }
+}
+
+
+TEST_CASE("hdbscan: leaf selection is at least as fine as EOM") {
+	// Two super-groups, each split into two sub-blobs: a small nested hierarchy.
+	const std::vector<std::array<double, 2>> centers = {
+		{ 0, 0 }, { 6, 0 },        // super-group A (two sub-blobs)
+		{ 100, 0 }, { 106, 0 }     // super-group B (two sub-blobs)
+	};
+	const auto pts = optics::testdata::gaussian_blobs<double, 2>( centers, 40, 0.6 );
+
+	const auto eom = optics::hdbscan( pts, 5, 5, optics::ClusterSelectionMethod::EOM );
+	const auto leaf = optics::hdbscan( pts, 5, 5, optics::ClusterSelectionMethod::Leaf );
+	CHECK( eom.n_clusters >= 2 );
+	CHECK( leaf.n_clusters >= eom.n_clusters );  // leaves are the finest partition
+}
+
+
+TEST_CASE("hdbscan: edge cases and degenerate inputs") {
+	using point = std::array<double, 2>;
+
+	// Empty cloud -> empty result.
+	const std::vector<point> empty;
+	const auto r0 = optics::hdbscan( empty, 3 );
+	CHECK( r0.labels.empty() );
+	CHECK( r0.n_clusters == 0 );
+
+	// Fewer points than min_cluster_size -> every point is noise.
+	const std::vector<point> few = { { 0, 0 }, { 1, 0 }, { 0, 1 } };
+	const auto r1 = optics::hdbscan( few, 5 );
+	CHECK( r1.labels.size() == few.size() );
+	for ( const int l : r1.labels ) { CHECK( l == -1 ); }
+	CHECK( r1.n_clusters == 0 );
+
+	// min_cluster_size < 2 is rejected.
+	const std::vector<point> some = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 1 } };
+	CHECK_THROWS_AS( optics::hdbscan( some, 1 ), std::invalid_argument );
+
+	// All-identical points: degenerate but must not crash; too few distinct to form a cluster.
+	const std::vector<point> dup( 10, point{ 2, 2 } );
+	const auto r2 = optics::hdbscan( dup, 3 );
+	CHECK( r2.labels.size() == dup.size() );
+}
+
+
+TEST_CASE("shdbscan: approximate HDBSCAN via CEOs agrees with exact on cosine blobs") {
+	// Angular blobs on the unit sphere -- the cosine regime sHDBSCAN (like sOPTICS) targets.
+	auto pts = optics::testdata::make_blobs<double, 3>( 5, 120, 30.0, 1.0, 321u );
+	for ( auto& p : pts ) {
+		const double nrm = std::sqrt( p[0] * p[0] + p[1] * p[1] + p[2] * p[2] );
+		if ( nrm > 0.0 ) { for ( auto& c : p ) { c /= nrm; } }
+	}
+	const std::size_t n = pts.size();
+	const std::size_t per = 120, mcs = 20, ms = 10;
+
+	const auto exact = optics::hdbscan( pts, mcs, ms );
+	const auto approx = optics::shdbscan( pts, mcs, ms, -1.0, 512u, 20u, std::size_t{ 40 }, 7u );
+	REQUIRE( approx.labels.size() == n );
+
+	std::vector<long long> truth( n );
+	for ( std::size_t i = 0; i < n; ++i ) { truth[i] = static_cast<long long>( i / per ); }
+
+	CHECK( rand_index( to_ll( exact.labels ), truth ) > 0.9 );                   // exact recovers the blobs
+	CHECK( rand_index( to_ll( approx.labels ), truth ) > 0.85 );                 // approximate, but close
+	CHECK( rand_index( to_ll( approx.labels ), to_ll( exact.labels ) ) > 0.85 ); // tracks exact hdbscan
+
+	for ( std::size_t i = 0; i < n; ++i ) {
+		CHECK( approx.probabilities[i] >= 0.0 );
+		CHECK( approx.probabilities[i] <= 1.0 );
+	}
+
+	// Deterministic in seed.
+	const auto again = optics::shdbscan( pts, mcs, ms, -1.0, 512u, 20u, std::size_t{ 40 }, 7u );
+	CHECK( ( approx.labels == again.labels ) );
+}
+
+
+TEST_CASE("shdbscan: edge cases and the L2 (random-features) metric path") {
+	using point = std::array<double, 3>;
+
+	// min_cluster_size < 2 rejected; empty -> empty; n < min_cluster_size -> all noise.
+	CHECK_THROWS_AS( optics::shdbscan( std::vector<point>{ { 1, 0, 0 }, { 0, 1, 0 } }, 1 ), std::invalid_argument );
+	const auto r0 = optics::shdbscan( std::vector<point>{}, 3 );
+	CHECK( r0.labels.empty() );
+	CHECK( r0.n_clusters == 0 );
+	const std::vector<point> few = { { 1, 0, 0 }, { 0, 1, 0 } };
+	const auto r1 = optics::shdbscan( few, 5 );
+	for ( const int l : r1.labels ) { CHECK( l == -1 ); }
+
+	// L2 metric: embed into random Fourier features, then the cosine pipeline. Clustering should
+	// then reflect Euclidean structure on the original (un-normalized) data.
+	const std::vector<std::array<double, 2>> centers = { { 0, 0 }, { 60, 0 }, { 30, 50 } };
+	const auto blobs = optics::testdata::gaussian_blobs<double, 2>( centers, 80, 1.5 );
+	const std::size_t n = blobs.size();
+	const auto res = optics::shdbscan( blobs, 15, 10, -1.0, 512u, 20u, std::size_t{ 40 }, 7u, 0u,
+									   optics::ClusterSelectionMethod::EOM, false, optics::Metric::L2 );
+	REQUIRE( res.labels.size() == n );
+	std::vector<long long> truth( n );
+	for ( std::size_t i = 0; i < n; ++i ) { truth[i] = static_cast<long long>( i / 80 ); }
+	CHECK( rand_index( to_ll( res.labels ), truth ) > 0.75 );  // Euclidean blobs recovered via L2 features
+}
+
+
+TEST_CASE("hdbscan: weighted all-ones == unweighted; weighted-on-dedup == unweighted-on-full (#46)") {
+	const std::vector<std::array<double, 2>> centers = { { 0, 0 }, { 100, 0 }, { 50, 100 } };
+	const auto pts = optics::testdata::gaussian_blobs<double, 2>( centers, 40, 1.5 );
+	const std::size_t n0 = pts.size();
+
+	// (1) All-ones explicit weights reproduce the unweighted clustering bit-for-bit.
+	const auto plain = optics::hdbscan( pts, 5 );
+	const std::vector<std::size_t> ones( n0, 1 );
+	const auto wones = optics::hdbscan( pts, 5, 0, optics::ClusterSelectionMethod::EOM, false, 0, true, ones );
+	CHECK( ( plain.labels == wones.labels ) );
+	CHECK( ( plain.probabilities == wones.probabilities ) );
+
+	// (2) Replicate points to create exact duplicates (reps < min_samples, so no zero-distance
+	// core collapse); weighted-on-dedup must give the same partition as unweighted-on-full.
+	std::vector<std::array<double, 2>> full;
+	std::mt19937 rng( 7 );
+	for ( const auto& p : pts ) { const int reps = 1 + static_cast<int>( rng() % 3 ); for ( int r = 0; r < reps; ++r ) { full.push_back( p ); } }
+	const std::size_t n = full.size();
+	REQUIRE( n > n0 );  // duplicates actually present
+
+	const auto on_full = optics::hdbscan( full, 10, 10, optics::ClusterSelectionMethod::EOM, false, 0, false );
+	const auto on_dedup = optics::hdbscan( full, 10, 10, optics::ClusterSelectionMethod::EOM, false, 0, true );
+	REQUIRE( on_full.labels.size() == n );
+	REQUIRE( on_dedup.labels.size() == n );
+	CHECK( rand_index( to_ll( on_full.labels ), to_ll( on_dedup.labels ) ) > 0.95 );
+
+	// Size-mismatched explicit weights are rejected.
+	CHECK_THROWS_AS( optics::hdbscan( pts, 5, 0, optics::ClusterSelectionMethod::EOM, false, 0, true,
+									  std::vector<std::size_t>{ 1, 2, 3 } ), std::invalid_argument );
+}
+
+
+TEST_CASE("shdbscan: weighted all-ones == unweighted; dedup tracks the full cloud (#46)") {
+	auto pts = optics::testdata::make_blobs<double, 3>( 5, 100, 30.0, 1.0, 321u );
+	for ( auto& p : pts ) {
+		const double nrm = std::sqrt( p[0] * p[0] + p[1] * p[1] + p[2] * p[2] );
+		if ( nrm > 0.0 ) { for ( auto& c : p ) { c /= nrm; } }
+	}
+	const std::size_t n0 = pts.size();
+
+	// All-ones weights leave the approximate clustering unchanged (same seed => same CEOs graph).
+	const auto base = optics::shdbscan( pts, 20, 10, -1.0, 512u, 20u, std::size_t{ 40 }, 7u, 0u,
+										optics::ClusterSelectionMethod::EOM, false, optics::Metric::Cosine, 0.0,
+										optics::SopticsProjection::Gaussian, false );
+	const std::vector<std::size_t> ones( n0, 1 );
+	const auto wones = optics::shdbscan( pts, 20, 10, -1.0, 512u, 20u, std::size_t{ 40 }, 7u, 0u,
+										 optics::ClusterSelectionMethod::EOM, false, optics::Metric::Cosine, 0.0,
+										 optics::SopticsProjection::Gaussian, false, ones );
+	CHECK( ( base.labels == wones.labels ) );
+
+	// Replicate to create duplicates; dedup (default) should track the full-cloud run.
+	std::vector<std::array<double, 3>> full;
+	std::mt19937 rng( 7 );
+	for ( const auto& p : pts ) { const int reps = 1 + static_cast<int>( rng() % 3 ); for ( int r = 0; r < reps; ++r ) { full.push_back( p ); } }
+	const std::size_t n = full.size();
+	REQUIRE( n > n0 );
+	const auto on_full = optics::shdbscan( full, 20, 10, -1.0, 512u, 20u, std::size_t{ 40 }, 7u, 0u,
+										   optics::ClusterSelectionMethod::EOM, false, optics::Metric::Cosine, 0.0,
+										   optics::SopticsProjection::Gaussian, false );
+	const auto on_dedup = optics::shdbscan( full, 20, 10, -1.0, 512u, 20u, std::size_t{ 40 }, 7u );  // dedup default
+	REQUIRE( on_dedup.labels.size() == n );
+	CHECK( rand_index( to_ll( on_full.labels ), to_ll( on_dedup.labels ) ) > 0.85 );
+
+	CHECK_THROWS_AS( optics::shdbscan( pts, 20, 10, -1.0, 512u, 20u, std::size_t{ 40 }, 7u, 0u,
+									   optics::ClusterSelectionMethod::EOM, false, optics::Metric::Cosine, 0.0,
+									   optics::SopticsProjection::Gaussian, true, std::vector<std::size_t>{ 1, 2, 3 } ),
+					 std::invalid_argument );
 }
 
 
