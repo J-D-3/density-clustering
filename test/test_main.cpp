@@ -10,6 +10,7 @@
 #include "../include/optics/optics.hpp"
 #include "../include/optics/testdata.hpp"
 #include "../include/optics/io.hpp"
+#include "../include/optics/detail/hadamard.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1651,6 +1652,43 @@ TEST_CASE("deduplicate_cosine: collapses same-direction points; weighted sOPTICS
 	const auto exp2 = optics::expand_clusters_to_original( optics::get_cluster_indices( wr, thr ), d2.unique_of_original );
 	const auto lb = labels_from_clusters( n, exp2 );
 	CHECK( rand_index( la, lb ) > 0.8 );
+}
+
+
+TEST_CASE("fast Walsh-Hadamard transform (#58 structured projections)") {
+	using optics::detail::fwht_inplace;
+	using optics::detail::next_pow2;
+	using optics::detail::is_pow2;
+
+	CHECK( next_pow2( 0 ) == 1 );
+	CHECK( next_pow2( 1 ) == 1 );
+	CHECK( next_pow2( 16 ) == 16 );
+	CHECK( next_pow2( 17 ) == 32 );
+	CHECK( is_pow2( 16 ) );
+	CHECK_FALSE( is_pow2( 17 ) );
+	CHECK_FALSE( is_pow2( 0 ) );
+
+	// Known transforms (Hadamard-ordered, unnormalized).
+	std::vector<double> a = { 1, 0, 0, 0 };
+	fwht_inplace( a );
+	for ( double v : a ) { CHECK( v == doctest::Approx( 1.0 ) ); }  // delta -> all ones
+
+	std::vector<double> b = { 1, 1, 1, 1 };
+	fwht_inplace( b );
+	CHECK( b[0] == doctest::Approx( 4.0 ) );
+	CHECK( b[1] == doctest::Approx( 0.0 ) );
+	CHECK( b[2] == doctest::Approx( 0.0 ) );
+	CHECK( b[3] == doctest::Approx( 0.0 ) );
+
+	// Involution up to scale: applying twice multiplies by n.
+	std::mt19937 rng( 5 );
+	std::normal_distribution<double> g( 0.0, 1.0 );
+	const std::size_t n = 8;
+	std::vector<double> x( n ), orig( n );
+	for ( std::size_t i = 0; i < n; ++i ) { x[i] = g( rng ); orig[i] = x[i]; }
+	fwht_inplace( x );
+	fwht_inplace( x );
+	for ( std::size_t i = 0; i < n; ++i ) { CHECK( x[i] == doctest::Approx( static_cast<double>( n ) * orig[i] ) ); }
 }
 
 
