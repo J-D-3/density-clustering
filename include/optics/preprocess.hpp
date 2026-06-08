@@ -100,6 +100,46 @@ DedupResult<T, Dim> deduplicate( const std::vector<std::array<T, Dim>>& points )
 }
 
 
+// Cosine-aware deduplication for sOPTICS (issue #46). sOPTICS clusters by the cosine metric (points
+// are L2-normalized onto the unit sphere internally), so points that are scalar multiples of each
+// other -- e.g. the same hue at different brightness, (100,50,50) and (200,100,100) -- are identical
+// to it, yet plain deduplicate() keeps them apart (their raw coordinates differ). This collapses
+// points by DIRECTION instead: it normalizes each point and deduplicates on the unit vector. Because
+// two scalar multiples normalize to only ALMOST the same bits, pass a `quantum > 0` to bin the unit
+// vector onto a grid (round each component to the nearest multiple) so near-identical directions
+// merge robustly; this is lossy, which matches sOPTICS's approximate nature. quantum == 0 merges only
+// directions that normalize bit-identically (exact duplicates + axis-aligned multiples). The stored
+// unique_points are the first-seen ORIGINAL representatives (sOPTICS re-normalizes them anyway).
+// Zero-norm points (the origin) have no direction and all collapse together.
+template <typename T, std::size_t Dim>
+DedupResult<T, Dim> deduplicate_cosine( const std::vector<std::array<T, Dim>>& points, double quantum = 0.0 ) {
+	DedupResult<T, Dim> r;
+	r.unique_of_original.resize( points.size() );
+	std::unordered_map<std::array<T, Dim>, std::size_t, detail::ArrayHash<T, Dim>, detail::ArrayEq<T, Dim>> seen;
+	seen.reserve( points.size() );
+	for ( std::size_t i = 0; i < points.size(); ++i ) {
+		double nrm_sq = 0.0;
+		for ( std::size_t c = 0; c < Dim; ++c ) { const double v = static_cast<double>( points[i][c] ); nrm_sq += v * v; }
+		const double nrm = std::sqrt( nrm_sq );
+		std::array<T, Dim> key;
+		for ( std::size_t c = 0; c < Dim; ++c ) {
+			double v = ( nrm > 0.0 ) ? static_cast<double>( points[i][c] ) / nrm : static_cast<double>( points[i][c] );
+			if ( quantum > 0.0 ) { v = std::round( v / quantum ) * quantum; }
+			key[c] = static_cast<T>( v );
+		}
+		auto [it, inserted] = seen.try_emplace( key, r.unique_points.size() );
+		if ( inserted ) {
+			r.unique_points.push_back( points[i] );  // original representative; sOPTICS re-normalizes
+			r.weights.push_back( 1 );
+		} else {
+			++r.weights[it->second];
+		}
+		r.unique_of_original[i] = it->second;
+	}
+	return r;
+}
+
+
 // Expand clusters expressed as lists of UNIQUE-point indices back to lists of ORIGINAL-point
 // indices, using the unique_of_original map from deduplicate(). The union over all clusters is
 // exactly {0..n-1} with no gaps or duplicates (every original belongs to its unique's cluster).

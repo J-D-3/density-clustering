@@ -13,7 +13,9 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
   its O(neighborhood²) ordering cost vanishes). New `include/optics/preprocess.hpp` exposes
   `deduplicate` (lossless, bit-identical merge, first-seen order), `expand_clusters_to_original`, and
   `quantize` (lossy grid snap that lets near-identical colors — JPEG/DCT artifacts, gradients — merge
-  too; composes as `quantize → deduplicate`). `compute_reachability_dists` and
+  too; composes as `quantize → deduplicate`). `deduplicate_cosine` additionally merges points by
+  *direction* (scalar multiples — same hue, different brightness), matching sOPTICS's cosine metric;
+  pass a `quantum > 0` to bin near-identical directions robustly. `compute_reachability_dists` and
   `compute_soptics_reachability_dists` gained an optional trailing `weights` argument (empty ⇒ the
   unweighted path, byte-for-byte unchanged); core-distance / `min_pts` / reachability follow
   scikit-learn DBSCAN's `sample_weight` semantics (neighborhood weight = Σ weights within ε incl.

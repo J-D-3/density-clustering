@@ -1613,6 +1613,47 @@ TEST_CASE("weighted sOPTICS: empty weights unchanged; dedup agrees with full (#4
 }
 
 
+TEST_CASE("deduplicate_cosine: collapses same-direction points; weighted sOPTICS agrees (#46)") {
+	// Scalar multiples share a direction (cosine-identical) but differ bit-for-bit, so raw
+	// deduplicate keeps them apart while deduplicate_cosine (with a small quantum) merges them.
+	std::vector<std::array<double, 3>> pts = {
+		{ 1, 2, 3 }, { 2, 4, 6 }, { 10, 20, 30 },  // one direction (x3)
+		{ 1, 0, 0 }, { 5, 0, 0 },                  // one direction (x2)
+		{ 0, 1, 0 } };                             // distinct
+	const auto dc = optics::deduplicate_cosine( pts, 1e-6 );
+	CHECK( dc.unique_points.size() == 3 );
+	std::size_t sumw = 0;
+	for ( const auto w : dc.weights ) { sumw += w; }
+	CHECK( sumw == pts.size() );
+	CHECK( optics::deduplicate( pts ).unique_points.size() == 6 );  // raw dedup keeps all 6
+
+	// End-to-end: weighted sOPTICS on the cosine-deduped cloud agrees with full sOPTICS.
+	const auto blobs = optics::testdata::make_blobs<double, 3>( 4, 60, 30.0, 1.0, 808u );
+	std::vector<std::array<double, 3>> full;
+	std::mt19937 rng( 11 );
+	for ( const auto& p : blobs ) {  // replicate each point at several brightnesses (same direction)
+		const int reps = 1 + static_cast<int>( rng() % 3 );
+		for ( int r = 0; r < reps; ++r ) {
+			const double s = 1.0 + 0.5 * static_cast<double>( r );
+			full.push_back( { p[0] * s, p[1] * s, p[2] * s } );
+		}
+	}
+	const std::size_t n = full.size();
+	const std::size_t mp = 6;
+	const double eps = 0.3;
+	const auto a = optics::compute_soptics_reachability_dists( full, mp, eps, 256u, 16u, std::size_t{ 32 }, 7u );
+	const auto d2 = optics::deduplicate_cosine( full, 1e-4 );
+	CHECK( d2.unique_points.size() < full.size() );  // brightness variants collapsed
+	const auto wr = optics::compute_soptics_reachability_dists(
+		d2.unique_points, mp, eps, 256u, 16u, std::size_t{ 32 }, 7u, 0u, optics::Metric::Cosine, 0.0, d2.weights );
+	const double thr = 0.5 * eps;
+	const auto la = labels_from_clusters( n, optics::get_cluster_indices( a, thr ) );
+	const auto exp2 = optics::expand_clusters_to_original( optics::get_cluster_indices( wr, thr ), d2.unique_of_original );
+	const auto lb = labels_from_clusters( n, exp2 );
+	CHECK( rand_index( la, lb ) > 0.8 );
+}
+
+
 #ifdef OPTICS_ENABLE_BOOST_RTREE
 // Only built when the optional Boost backend is enabled. Verifies that the Boost
 // R*-tree backend is interchangeable with nanoflann (issue #27): identical
