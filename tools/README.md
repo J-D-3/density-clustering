@@ -68,6 +68,9 @@ python tools/run_matrix.py --tier pilot --out results/matrix.csv   # add --resum
 python tools/analyze_matrix.py results/matrix.csv --out results/report.md
 ```
 
+For the full study on a reference machine (build, env, tiers, cost estimates, provenance), follow the
+step-by-step runbook: [`../docs/benchmark-matrix-runbook.md`](../docs/benchmark-matrix-runbook.md).
+
 Tiers: `pilot` (tiny end-to-end smoke), `scaling` (n-spine), `dim` (d-spine) — `--list-tiers` to
 see cell counts. ELKI / NinhPham-sDbscan are **deferred past 1.0.0** to a Docker repro env (see
 below). `results/` and `data/` are gitignored (reproducible from these scripts).

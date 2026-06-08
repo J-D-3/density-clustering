@@ -157,6 +157,10 @@ code → `run_matrix.py --engines ours-optics --refresh` (only the affected engi
 
 ### B2 — Run (design §10 phasing)
 
+> **Operational runbook:** [`benchmark-matrix-runbook.md`](benchmark-matrix-runbook.md) — the
+> step-by-step commands to execute B2 on the reference machine (build, env, gate, tiers, analysis,
+> provenance, cost estimates).
+
 **Phase-0 readiness check (all green except the two deliberately-deferred items):**
 
 | Prerequisite | State |
