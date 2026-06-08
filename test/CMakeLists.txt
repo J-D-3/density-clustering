@@ -76,3 +76,8 @@ target_link_libraries(optics_quality_compare PRIVATE optics::optics)
 # backend on a dense cloud (defines OPTICS_PROFILE internally). Release config; not a ctest.
 add_executable(optics_reuse_probe Benchmark/reuse_probe.cpp)
 target_link_libraries(optics_reuse_probe PRIVATE optics::optics)
+
+# sOPTICS distance-reuse probe: CEOs out_sq reuse vs recompute, per-phase timing on a
+# higher-D cloud (defines OPTICS_PROFILE internally). Release config; not a ctest.
+add_executable(optics_soptics_reuse_probe Benchmark/soptics_reuse_probe.cpp)
+target_link_libraries(optics_soptics_reuse_probe PRIVATE optics::optics)
