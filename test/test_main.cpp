@@ -1877,6 +1877,64 @@ TEST_CASE("hdbscan: edge cases and degenerate inputs") {
 }
 
 
+TEST_CASE("shdbscan: approximate HDBSCAN via CEOs agrees with exact on cosine blobs") {
+	// Angular blobs on the unit sphere -- the cosine regime sHDBSCAN (like sOPTICS) targets.
+	auto pts = optics::testdata::make_blobs<double, 3>( 5, 120, 30.0, 1.0, 321u );
+	for ( auto& p : pts ) {
+		const double nrm = std::sqrt( p[0] * p[0] + p[1] * p[1] + p[2] * p[2] );
+		if ( nrm > 0.0 ) { for ( auto& c : p ) { c /= nrm; } }
+	}
+	const std::size_t n = pts.size();
+	const std::size_t per = 120, mcs = 20, ms = 10;
+
+	const auto exact = optics::hdbscan( pts, mcs, ms );
+	const auto approx = optics::shdbscan( pts, mcs, ms, -1.0, 512u, 20u, std::size_t{ 40 }, 7u );
+	REQUIRE( approx.labels.size() == n );
+
+	std::vector<long long> truth( n );
+	for ( std::size_t i = 0; i < n; ++i ) { truth[i] = static_cast<long long>( i / per ); }
+
+	CHECK( rand_index( to_ll( exact.labels ), truth ) > 0.9 );                   // exact recovers the blobs
+	CHECK( rand_index( to_ll( approx.labels ), truth ) > 0.85 );                 // approximate, but close
+	CHECK( rand_index( to_ll( approx.labels ), to_ll( exact.labels ) ) > 0.85 ); // tracks exact hdbscan
+
+	for ( std::size_t i = 0; i < n; ++i ) {
+		CHECK( approx.probabilities[i] >= 0.0 );
+		CHECK( approx.probabilities[i] <= 1.0 );
+	}
+
+	// Deterministic in seed.
+	const auto again = optics::shdbscan( pts, mcs, ms, -1.0, 512u, 20u, std::size_t{ 40 }, 7u );
+	CHECK( ( approx.labels == again.labels ) );
+}
+
+
+TEST_CASE("shdbscan: edge cases and the L2 (random-features) metric path") {
+	using point = std::array<double, 3>;
+
+	// min_cluster_size < 2 rejected; empty -> empty; n < min_cluster_size -> all noise.
+	CHECK_THROWS_AS( optics::shdbscan( std::vector<point>{ { 1, 0, 0 }, { 0, 1, 0 } }, 1 ), std::invalid_argument );
+	const auto r0 = optics::shdbscan( std::vector<point>{}, 3 );
+	CHECK( r0.labels.empty() );
+	CHECK( r0.n_clusters == 0 );
+	const std::vector<point> few = { { 1, 0, 0 }, { 0, 1, 0 } };
+	const auto r1 = optics::shdbscan( few, 5 );
+	for ( const int l : r1.labels ) { CHECK( l == -1 ); }
+
+	// L2 metric: embed into random Fourier features, then the cosine pipeline. Clustering should
+	// then reflect Euclidean structure on the original (un-normalized) data.
+	const std::vector<std::array<double, 2>> centers = { { 0, 0 }, { 60, 0 }, { 30, 50 } };
+	const auto blobs = optics::testdata::gaussian_blobs<double, 2>( centers, 80, 1.5 );
+	const std::size_t n = blobs.size();
+	const auto res = optics::shdbscan( blobs, 15, 10, -1.0, 512u, 20u, std::size_t{ 40 }, 7u, 0u,
+									   optics::ClusterSelectionMethod::EOM, false, optics::Metric::L2 );
+	REQUIRE( res.labels.size() == n );
+	std::vector<long long> truth( n );
+	for ( std::size_t i = 0; i < n; ++i ) { truth[i] = static_cast<long long>( i / 80 ); }
+	CHECK( rand_index( to_ll( res.labels ), truth ) > 0.75 );  // Euclidean blobs recovered via L2 features
+}
+
+
 #ifdef OPTICS_ENABLE_BOOST_RTREE
 // Only built when the optional Boost backend is enabled. Verifies that the Boost
 // R*-tree backend is interchangeable with nanoflann (issue #27): identical
