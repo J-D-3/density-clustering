@@ -46,8 +46,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gen_dataset as G  # noqa: E402
 
 # ---- optional deps (scored only if present) --------------------------------------------
+# The scikit-learn *clusterers* run in the sk_engine.py subprocess; here we only need its metrics
+# to score every engine's labels against ground truth.
 try:
-    from sklearn.cluster import OPTICS, DBSCAN, KMeans, HDBSCAN
     from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score, rand_score
     _HAVE_SK = True
 except Exception:  # pragma: no cover
@@ -67,6 +68,9 @@ def _cells_pilot():
 
 
 def _cells_scaling():  # Tier A spine (n full at d in {3,16}); gated by feasibility at the top end.
+    # Capped at 1e6: the design's 1e7 level needs a streaming generator/CSV writer (a 1e7x16 CSV is
+    # ~2.5 GB) -- add 3162278, 10000000 here once that lands. The feasibility gate skips the exact
+    # O(n^2) engines (sk-optics, exact HDBSCAN) well before the top of even this range.
     ns = [316, 1000, 3162, 10000, 31623, 100000, 316228, 1000000]
     return [dict(n=n, d=d, k=max(2, d // 2), density="mixed", noise=0.1, shape="blobs")
             for d in (3, 16) for n in ns]
@@ -107,13 +111,38 @@ def find_exe(name):
 
 
 def predicted_seconds(engine, n, d, density):
-    """Cheap cost model for feasibility gating (design section 3b). Conservative upper bounds:
-    O(n^2)-ish engines (exact OPTICS/HDBSCAN, sklearn-OPTICS) blow up on dense/large n."""
-    quad = engine in ("ours-hdbscan", "sk-optics", "sk-hdbscan")
-    optics_quad_dense = engine in ("ours-optics",) and density == "dense"
-    if quad or optics_quad_dense:
-        return (n / 3000.0) ** 2 * 0.5  # ~0.5 s at n=3000, quadratic
-    return (n / 100000.0) * 2.0  # ~linear, 2 s at 1e5
+    """Cheap per-engine upper-bound cost model for feasibility gating (design section 3b).
+
+    Deliberately conservative -- far better to over-estimate and skip+log a cell than to let an
+    O(n^2) engine hang for hours. Constants are loose, calibrated from the pilot + the
+    perf/README scaling tables; the value only has to land the right side of the budget. Engines
+    that recompute neighborhoods (exact OPTICS on dense, exact HDBSCAN dense-Prim, scikit OPTICS)
+    are ~O(n^2); the random-projection / linear methods are ~O(n)."""
+    n = float(n)
+    if engine == "sk-optics":                        # scikit OPTICS ~O(n^2), large constant
+        return (n / 1000.0) ** 2 * 0.05              # ~0.05s @1k, ~5s @10k, ~500s @100k
+    if engine in ("sk-hdbscan", "sk-dbscan"):        # sub-quadratic but super-linear
+        return (n / 1000.0) ** 1.5 * 0.02
+    if engine == "ours-hdbscan":                     # exact dense-Prim mutual-reach MST, O(n^2)
+        return (n / 1000.0) ** 2 * 0.02              # ~0.02s @1k, ~2s @10k, ~200s @100k
+    if engine == "ours-optics":                      # ~linear with bounded knee-eps; dense ~O(n^2)
+        lin = (n / 1e5) * 2.0
+        return lin * ((n / 3000.0) if density == "dense" else 1.0)
+    if engine in ("ours-soptics", "ours-shdbscan"):  # CEOs random-projection build, ~linear-ish
+        return (n / 1e5) * 4.0
+    if engine == "sk-kmeans":                        # near-linear (Lloyd)
+        return (n / 1e6) * 2.0
+    return (n / 1e5) * 2.0
+
+
+def reps_for(n, base_reps):
+    """Auto-reduce repetitions as n grows (design section 3b: more reps at small n -> 1 at the
+    top), so the scaling spine stays affordable while small cells keep a variance estimate."""
+    if n <= 10_000:
+        return base_reps
+    if n <= 100_000:
+        return max(1, base_reps // 2)
+    return 1
 
 
 # ---- engine runners: each returns dict(labels=np.array|None, ordering_ms, total_ms, eps, status) ----
@@ -140,29 +169,33 @@ def run_ours(exe, algo, coords_path, labels_out, n, min_pts, mcs, metric, mode, 
                 total_ms=total_ms, eps=float(res.get("eps", -1)), status="ok")
 
 
-def run_sklearn(kind, X, min_pts, mcs, eps, timeout):
+def run_sklearn(kind, coords_path, labels_out, n, k, min_pts, mcs, eps, timeout):
+    """Run a scikit-learn clusterer in a SUBPROCESS (tools/sk_engine.py) with a hard wall-clock
+    timeout. scikit-learn's fit can't be interrupted in-process, so isolating it as a subprocess is
+    what lets an under-predicted O(n^2) cell be killed and recorded as timed-out rather than hanging
+    the whole run (design section 3b)."""
     if not _HAVE_SK:
         return dict(labels=None, ordering_ms=-1, total_ms=-1, eps=eps, status="no_sklearn")
+    worker = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sk_engine.py")
+    cmd = [sys.executable, worker, "--coords", coords_path, "--kind", kind,
+           "--out-labels", labels_out, "--min-pts", str(min_pts), "--min-cluster-size", str(mcs),
+           "--eps", str(eps), "--k", str(k)]
     t0 = time.perf_counter()
     try:
-        if kind == "sk-optics":
-            lab = OPTICS(min_samples=min_pts, cluster_method="xi").fit_predict(X)
-        elif kind == "sk-hdbscan":
-            lab = HDBSCAN(min_cluster_size=mcs, min_samples=min_pts).fit_predict(X)
-        elif kind == "sk-dbscan":
-            lab = DBSCAN(eps=eps, min_samples=min_pts).fit_predict(X)
-        elif kind == "sk-kmeans":
-            k = max(1, len(set(int(v) for v in _truth_cache.get(id(X), [0])) - {-1}) or 3)
-            lab = KMeans(n_clusters=k, n_init=10).fit_predict(X)
-        else:
-            return dict(labels=None, ordering_ms=-1, total_ms=-1, eps=eps, status="unknown")
-    except Exception:
-        return dict(labels=None, ordering_ms=-1, total_ms=-1, eps=eps, status="error")
-    ms = (time.perf_counter() - t0) * 1000.0
-    return dict(labels=np.asarray(lab), ordering_ms=int(ms), total_ms=ms, eps=eps, status="ok")
-
-
-_truth_cache = {}
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return dict(labels=None, ordering_ms=-1, total_ms=timeout * 1000, eps=eps, status="timeout")
+    total_ms = (time.perf_counter() - t0) * 1000.0
+    if p.returncode != 0:
+        return dict(labels=None, ordering_ms=-1, total_ms=total_ms, eps=eps, status="error")
+    res = {}
+    for line in p.stdout.splitlines():
+        if line.startswith("RESULT"):
+            for kv in line.split()[1:]:
+                kk, _, vv = kv.partition("=")
+                res[kk] = vv
+    return dict(labels=_read_labels(labels_out, n), ordering_ms=int(res.get("ordering_ms", -1)),
+                total_ms=total_ms, eps=eps, status="ok")
 
 
 def _read_labels(path, n):
@@ -182,16 +215,26 @@ def score(pred, truth):
             rand_score(truth, pred))
 
 
-def applicable_engines(c, exe):
-    """Which (engine, algo, metric_space) tuples apply to this cell (design section 9 fairness)."""
-    eng = []
-    if exe:
-        eng += [("ours-optics", "optics", "euclidean"), ("ours-hdbscan", "hdbscan", "euclidean")]
-        # cosine methods (sOPTICS/sHDBSCAN) are scored on every cell but flagged as cosine-space;
-        # the analysis only *compares* them to exact on angular data (section 9.2).
-        eng += [("ours-soptics", "soptics", "cosine"), ("ours-shdbscan", "shdbscan", "cosine")]
-    eng += [("sk-optics", None, "euclidean"), ("sk-hdbscan", None, "euclidean"),
-            ("sk-kmeans", None, "euclidean")]
+# Engine registry (design section 4). To ADD an engine/algorithm later -- a new backend, a new
+# extraction, a future competitor -- append one (engine_name, algo|None, metric_space) tuple here
+# (and, for an "ours-*" engine, teach optics_matrix the --algo, or add a runner branch). The rest
+# of the pipeline (gating, scoring, tidy CSV, analysis) needs no change. This is the seam that lets
+# the matrix be re-run/extended when the algorithmic infrastructure changes (see the reproducibility
+# note in docs/ROADMAP-1.0.0-execution.md).
+OURS_ENGINES = [("ours-optics", "optics", "euclidean"), ("ours-hdbscan", "hdbscan", "euclidean"),
+                ("ours-soptics", "soptics", "cosine"), ("ours-shdbscan", "shdbscan", "cosine")]
+SK_ENGINES = [("sk-optics", None, "euclidean"), ("sk-hdbscan", None, "euclidean"),
+              ("sk-kmeans", None, "euclidean")]
+
+
+def applicable_engines(c, exe, only=None):
+    """Which (engine, algo, metric_space) tuples apply to this cell (design section 9 fairness).
+    `only` (a set of engine names) restricts to those engines -- used by --engines to re-run a
+    subset after an infrastructure change. cosine methods (sOPTICS/sHDBSCAN) are scored on every
+    cell but flagged cosine-space; the analysis only *compares* them to exact on angular data."""
+    eng = (OURS_ENGINES if exe else []) + SK_ENGINES
+    if only:
+        eng = [e for e in eng if e[0] in only]
     return eng
 
 
@@ -206,6 +249,12 @@ def main(argv=None):
     p.add_argument("--budget-s", type=float, default=600.0, help="per-run feasibility cap (s)")
     p.add_argument("--data-dir", default="data/matrix")
     p.add_argument("--resume", action="store_true")
+    p.add_argument("--engines", nargs="*", default=None,
+                   help="restrict to these engine names (e.g. ours-optics ours-soptics) -- the way "
+                        "to re-run a subset after changing that algorithm's code")
+    p.add_argument("--refresh", action="store_true",
+                   help="ignore existing checkpoint rows for the engines being run, so they re-run "
+                        "and append fresh rows (newer commit/timestamp); analyze takes the latest")
     p.add_argument("--list-tiers", action="store_true")
     args = p.parse_args(argv)
 
@@ -222,12 +271,19 @@ def main(argv=None):
     os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
     os.makedirs(args.data_dir, exist_ok=True)
 
+    only = set(args.engines) if args.engines else None
     done = set()
-    if args.resume and os.path.isfile(args.out):
+    if (args.resume or args.refresh) and os.path.isfile(args.out):
         with open(args.out, newline="") as f:
             for row in csv.DictReader(f):
                 done.add((row["cell_id"], row["engine"], row["config"], row["rep"]))
-        print(f"resume: {len(done)} (cell,engine,config,rep) measure-groups already recorded")
+        if args.refresh:
+            # re-run (and re-append) the selected engines: drop their checkpoint entries so they
+            # are not skipped. With no --engines filter, --refresh re-runs everything.
+            before = len(done)
+            done = {k for k in done if only and k[1] not in only}
+            print(f"refresh: dropped {before - len(done)} checkpoint entries for re-run")
+        print(f"resume/refresh: {len(done)} (cell,engine,config,rep) groups kept (skipped)")
 
     new_file = not os.path.isfile(args.out)
     fout = open(args.out, "a", newline="")
@@ -241,25 +297,27 @@ def main(argv=None):
     commit = git_commit()
     threads = os.environ.get("OPTICS_BENCH_THREADS", "4")
     cells = TIERS[args.tier]()
-    print(f"tier={args.tier}: {len(cells)} cells x {args.reps} rep(s); exe={'yes' if exe else 'NO'}")
+    print(f"tier={args.tier}: {len(cells)} cells (reps auto-scale with n); "
+          f"engines={'all' if not only else ','.join(sorted(only))}; exe={'yes' if exe else 'NO'}")
 
     for c in cells:
         cid = cell_id(c)
         mcs = max(2, args.min_pts)
-        for rep in range(args.reps):
+        n_reps = reps_for(c["n"], args.reps)  # fewer reps as n grows (section 3b)
+        for rep in range(n_reps):
             seed = args.seed + rep
+            todo = [(e, a, m) for (e, a, m) in applicable_engines(c, exe, only)
+                    if (cid, e, f"{m}/knee/mp{args.min_pts}", str(rep)) not in done]
+            if not todo:
+                continue  # nothing to run for this (cell, rep) -- skip generation entirely
             coords = os.path.join(args.data_dir, f"{cid}_s{seed}.csv")
-            truth_p = os.path.splitext(coords)[0] + "_truth.csv"
             X, y = G.generate(c["n"], c["d"], c["k"], c["density"], c["noise"], c["shape"], seed)
             G.write_csv(X, y, coords)
             truth = y
-            _truth_cache[id(X)] = truth
+            true_k = len(set(int(v) for v in y) - {-1})  # KMeans n_clusters
 
-            for engine, algo, mspace in applicable_engines(c, exe):
+            for engine, algo, mspace in todo:
                 config = f"{mspace}/knee/mp{args.min_pts}"
-                key = (cid, engine, config, str(rep))
-                if key in done:
-                    continue
                 ts = time.strftime("%Y-%m-%dT%H:%M:%S")
 
                 # feasibility gate
@@ -277,7 +335,9 @@ def main(argv=None):
                                  mspace if mspace in ("l2", "l1", "cosine") else "cosine",
                                  "ondemand", "gaussian", args.budget_s)
                 else:
-                    r = run_sklearn(engine, X, args.min_pts, mcs, eps=1.0, timeout=args.budget_s)
+                    labels_out = os.path.splitext(coords)[0] + f"_{engine}.csv"
+                    r = run_sklearn(engine, coords, labels_out, c["n"], true_k, args.min_pts, mcs,
+                                    eps=1.0, timeout=args.budget_s)
 
                 ari, nmi, rand = score(r["labels"], truth)
                 npred = (len(set(int(v) for v in r["labels"]) - {-1}) if r["labels"] is not None else -1)

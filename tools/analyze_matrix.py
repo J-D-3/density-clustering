@@ -29,12 +29,24 @@ CELL_KEYS = ("n", "d", "k", "density", "noise", "shape")
 
 
 def load(path):
-    """Return (cells, agg): cells[cell_id]=metadata; agg[cell_id][engine][measure]=median over reps."""
+    """Return (cells, agg): cells[cell_id]=metadata; agg[cell_id][engine][measure]=median over reps.
+
+    Re-run safe: when the same (cell, engine, config, rep, measure) appears more than once -- e.g.
+    after a `run_matrix.py --refresh` re-ran an engine on a newer commit -- the **latest by
+    timestamp** wins, so updated results supersede stale ones instead of being medianed together
+    across code versions. This is what lets the matrix be *updated* when the infrastructure changes."""
     rows = list(csv.DictReader(open(path, newline="")))
+    # 1) keep the latest row per exact measurement key (timestamps are ISO -> lexicographically sortable)
+    latest = {}
+    for r in rows:
+        key = (r["cell_id"], r["engine"], r["config"], r["rep"], r["measure"])
+        prev = latest.get(key)
+        if prev is None or r.get("timestamp", "") >= prev.get("timestamp", ""):
+            latest[key] = r
     cells = {}
     bucket = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
     status = defaultdict(dict)
-    for r in rows:
+    for r in latest.values():
         cid, eng, meas = r["cell_id"], r["engine"], r["measure"]
         cells.setdefault(cid, {k: r[k] for k in CELL_KEYS} | {"metric_space": r["metric_space"]})
         if meas == "status":
