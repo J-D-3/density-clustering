@@ -77,6 +77,11 @@ target_link_libraries(optics_soptics_compare PRIVATE optics::optics)
 add_executable(optics_quality_compare Benchmark/quality_compare.cpp)
 target_link_libraries(optics_quality_compare PRIVATE optics::optics)
 
+# Emits HDBSCAN* + sHDBSCAN predicted labels for a CSV cloud (for tools/hdbscan_benchmark.py to
+# cross-check against scikit-learn's HDBSCAN + ground truth, #52). Release config; not a ctest.
+add_executable(hdbscan_compare Benchmark/hdbscan_compare.cpp)
+target_link_libraries(hdbscan_compare PRIVATE optics::optics)
+
 # #55 distance-reuse probe: per-phase timing of the reuse fast path vs a recompute-only
 # backend on a dense cloud (defines OPTICS_PROFILE internally). Release config; not a ctest.
 add_executable(optics_reuse_probe Benchmark/reuse_probe.cpp)

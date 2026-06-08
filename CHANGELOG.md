@@ -44,6 +44,13 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
   the unweighted result bit-for-bit, and **weighted-on-dedup equals unweighted-on-full exactly
   (Rand = 1.0)** for exact `hdbscan()` (≈ 0.91 for approximate `shdbscan()`); clouds with no duplicates
   fall through unchanged. Needs a backend modeling `KnnCoreDistWeighted` (NanoflannBackend does).
+- **HDBSCAN\* cross-check harness** (#52): new `hdbscan_compare` C++ label emitter +
+  `tools/hdbscan_benchmark.py` score our `hdbscan`/`shdbscan` against `sklearn.cluster.HDBSCAN` and
+  ground truth (ARI/NMI/Rand) with a direct **ours-vs-sklearn label-agreement** column. **Measured: our
+  exact `hdbscan` matches scikit-learn at ARI 0.99–1.00 across all 13 datasets** (Euclidean 2-D toys,
+  cosine high-D clouds, Franti shape sets), validating the reimplementation; `shdbscan` (cosine) matches
+  on the cosine clouds and is weaker on Euclidean toys, as expected. `min_samples` is self-inclusive in
+  both libraries and passed identically. See `tools/README.md`.
 - **Structured (FHT spinner) projections for sOPTICS** (#58, opt-in): `SopticsProjection::Structured`
   replaces the Gaussian CEOs projection (`O(D·Dim)` per point) with random spinners
   `x → H D₃ H D₂ H D₁ x` (sign-flip + fast Walsh-Hadamard transform, `O(D·log Dim)`; new
