@@ -1935,6 +1935,44 @@ TEST_CASE("shdbscan: edge cases and the L2 (random-features) metric path") {
 }
 
 
+TEST_CASE("shdbscan: structured (FHT) projections agree with Gaussian; seed-deterministic (#58)") {
+	// The SopticsProjection::Structured (FHT spinner) path also feeds shdbscan via the CEOs graph;
+	// it must recover the same clusters as the Gaussian default. Pairs with the sOPTICS structured
+	// test -- here the projection choice flows through the mutual-reachability MST instead of the
+	// ordering loop.
+	auto pts = optics::testdata::make_blobs<double, 3>( 5, 120, 30.0, 1.0, 321u );
+	for ( auto& p : pts ) {  // cosine metric: onto the unit sphere
+		const double nrm = std::sqrt( p[0] * p[0] + p[1] * p[1] + p[2] * p[2] );
+		if ( nrm > 0.0 ) { for ( auto& c : p ) { c /= nrm; } }
+	}
+	const std::size_t n = pts.size(), per = 120, mcs = 20, ms = 10;
+
+	std::vector<long long> truth( n );
+	for ( std::size_t i = 0; i < n; ++i ) { truth[i] = static_cast<long long>( i / per ); }
+
+	const auto gaussian = optics::shdbscan( pts, mcs, ms, -1.0, 512u, 20u, std::size_t{ 40 }, 7u, 0u,
+											optics::ClusterSelectionMethod::EOM, false, optics::Metric::Cosine,
+											0.0, optics::SopticsProjection::Gaussian );
+	const auto structured = optics::shdbscan( pts, mcs, ms, -1.0, 512u, 20u, std::size_t{ 40 }, 7u, 0u,
+											  optics::ClusterSelectionMethod::EOM, false, optics::Metric::Cosine,
+											  0.0, optics::SopticsProjection::Structured );
+	REQUIRE( structured.labels.size() == n );
+
+	CHECK( rand_index( to_ll( structured.labels ), truth ) > 0.85 );                   // recovers the blobs
+	CHECK( rand_index( to_ll( structured.labels ), to_ll( gaussian.labels ) ) > 0.85 );  // tracks Gaussian
+	for ( std::size_t i = 0; i < n; ++i ) {
+		CHECK( structured.probabilities[i] >= 0.0 );
+		CHECK( structured.probabilities[i] <= 1.0 );
+	}
+
+	// Deterministic in seed.
+	const auto again = optics::shdbscan( pts, mcs, ms, -1.0, 512u, 20u, std::size_t{ 40 }, 7u, 0u,
+										 optics::ClusterSelectionMethod::EOM, false, optics::Metric::Cosine,
+										 0.0, optics::SopticsProjection::Structured );
+	CHECK( ( structured.labels == again.labels ) );
+}
+
+
 TEST_CASE("hdbscan: weighted all-ones == unweighted; weighted-on-dedup == unweighted-on-full (#46)") {
 	const std::vector<std::array<double, 2>> centers = { { 0, 0 }, { 100, 0 }, { 50, 100 } };
 	const auto pts = optics::testdata::gaussian_blobs<double, 2>( centers, 40, 1.5 );
