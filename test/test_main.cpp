@@ -1529,6 +1529,36 @@ TEST_CASE("weighted eps: total-weight estimate matches the expanded full cloud (
 }
 
 
+TEST_CASE("weighted knee epsilon: within-cluster scale; weighted k-distance (#46)") {
+	// Tight blobs, replicated into exact duplicates carrying weights.
+	const auto base = optics::testdata::make_blobs<double, 2>( 6, 40, 60.0, 0.5, 31u );
+	std::vector<std::array<double, 2>> full;
+	std::mt19937 rng( 2 );
+	for ( const auto& p : base ) {
+		const int reps = 1 + static_cast<int>( rng() % 3 );
+		for ( int r = 0; r < reps; ++r ) { full.push_back( p ); }
+	}
+	const auto d = optics::deduplicate( full );
+	const std::size_t mp = 6;
+
+	const double knee = optics::epsilon_estimation_knee<double, 2>( d.unique_points, mp, d.weights );
+	const double unif = optics::epsilon_estimation( d.unique_points, mp, d.weights );
+	CHECK( knee > 0.0 );
+	CHECK( knee < unif );  // knee tracks the within-cluster scale; uniform over-shoots on clustered data
+
+	// Backend: weighted k-distance with all-ones weights == the unweighted k-distance.
+	const optics::NanoflannBackend<double, 2> be( d.unique_points );
+	const std::vector<std::size_t> ones( d.unique_points.size(), 1 );
+	for ( std::size_t i = 0; i < std::min<std::size_t>( 5, d.unique_points.size() ); ++i ) {
+		const auto w = be.knn_core_dist_weighted( d.unique_points[i], ones, mp );
+		const auto u = be.knn_core_dist( d.unique_points[i], mp, 1e18 );
+		REQUIRE( w.has_value() );
+		REQUIRE( u.has_value() );
+		CHECK( *w == doctest::Approx( *u ) );
+	}
+}
+
+
 TEST_CASE("Xi weighted spans: all-ones position weights are identical to unweighted (#46)") {
 	// The prefix-sum threading must not perturb the extractor when every weight is 1
 	// (this is what keeps the pinned chi_test_* green). Same hand-crafted ordering as the
