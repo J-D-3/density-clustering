@@ -6,6 +6,7 @@
 #pragma once
 
 #include "backend.hpp"
+#include "preprocess.hpp"
 #include "tree.hpp"
 #include "version.hpp"
 #include "detail/math.hpp"
@@ -102,6 +103,68 @@ inline std::optional<double> compute_core_dist_from_sq( const std::vector<double
 	scratch.assign( sq_dists.begin(), sq_dists.end() );
 	std::nth_element( scratch.begin(), scratch.begin() + ( min_pts - 1 ), scratch.end() );
 	return std::sqrt( scratch[min_pts - 1] );
+}
+
+
+// Weighted core-distance (unique-point OPTICS, issue #46). Each neighbor carries an integer
+// weight (= how many identical original points it stands for). The neighborhood "count" is the
+// SUM of weights within eps (the point itself, at distance 0, is in neighbor_indices and counts
+// its full weight); the point is a core object iff that sum reaches min_pts, and the core-distance
+// is the distance at which the cumulative weight -- neighbors sorted ascending by distance -- first
+// reaches min_pts. This matches scikit-learn DBSCAN's sample_weight semantics. With every weight
+// == 1 it reduces exactly to compute_core_dist's min_pts-th-neighbor distance. Unlike the
+// unweighted path it cannot use nth_element: the k-th position depends on a running prefix sum, so
+// the distances are fully sorted. nullopt if the total neighborhood weight is below min_pts.
+template <typename T, std::size_t Dim>
+std::optional<double> compute_core_dist_weighted( const Point<T, Dim>& point,
+												  const std::vector<Point<T, Dim>>& points,
+												  const std::vector<std::size_t>& neighbor_indices,
+												  const std::vector<std::size_t>& weights,
+												  std::size_t min_pts ) {
+	std::size_t total = 0;
+	for ( const std::size_t idx : neighbor_indices ) { total += weights[idx]; }
+	if ( total < min_pts ) { return std::nullopt; }
+
+	thread_local std::vector<std::pair<double, std::size_t>> dw;  // (squared distance, weight)
+	dw.clear();
+	dw.reserve( neighbor_indices.size() );
+	for ( const std::size_t idx : neighbor_indices ) {
+		dw.emplace_back( detail::square_dist( point, points[idx] ), weights[idx] );
+	}
+	std::sort( dw.begin(), dw.end(), []( const auto& a, const auto& b ) { return a.first < b.first; } );
+	std::size_t acc = 0;
+	for ( const auto& [sq, w] : dw ) {
+		acc += w;
+		if ( acc >= min_pts ) { return std::sqrt( sq ); }
+	}
+	return std::sqrt( dw.back().first );  // unreachable: total >= min_pts guarantees an earlier return
+}
+
+
+// Weighted core-distance from squared distances the backend already computed (the #55 reuse path
+// and sOPTICS). sq_dists is parallel to neighbor_indices; weights is indexed by point index. Same
+// weighted-selection semantics as compute_core_dist_weighted.
+inline std::optional<double> compute_core_dist_weighted_from_sq( const std::vector<double>& sq_dists,
+																 const std::vector<std::size_t>& neighbor_indices,
+																 const std::vector<std::size_t>& weights,
+																 std::size_t min_pts ) {
+	std::size_t total = 0;
+	for ( const std::size_t idx : neighbor_indices ) { total += weights[idx]; }
+	if ( total < min_pts ) { return std::nullopt; }
+
+	thread_local std::vector<std::pair<double, std::size_t>> dw;
+	dw.clear();
+	dw.reserve( sq_dists.size() );
+	for ( std::size_t j = 0; j < sq_dists.size(); ++j ) {
+		dw.emplace_back( sq_dists[j], weights[neighbor_indices[j]] );
+	}
+	std::sort( dw.begin(), dw.end(), []( const auto& a, const auto& b ) { return a.first < b.first; } );
+	std::size_t acc = 0;
+	for ( const auto& [sq, w] : dw ) {
+		acc += w;
+		if ( acc >= min_pts ) { return std::sqrt( sq ); }
+	}
+	return std::sqrt( dw.back().first );
 }
 
 
@@ -259,6 +322,39 @@ double epsilon_estimation( const std::vector<Point<T, dimension>>& points, std::
 	return std::pow( space_per_minpts_points / n_dim_unit_ball_vol, 1.0 / d );
 }
 
+// Weighted variant for unique-point OPTICS (issue #46): the deduplicated cloud has the same
+// bounding-box geometry as the full cloud, only fewer (weighted) points, so the density must use
+// the TOTAL weight (= the original point count) rather than the unique-point count. With every
+// weight == 1 this equals epsilon_estimation(points, min_pts). weights is parallel to points.
+template <typename T, std::size_t dimension>
+double epsilon_estimation( const std::vector<Point<T, dimension>>& points, std::size_t min_pts,
+						   const std::vector<std::size_t>& weights ) {
+	static_assert( std::is_convertible<double, T>::value, "epsilon_estimation: point type 'T' must be convertible to double" );
+	static_assert( dimension >= 1, "epsilon_estimation: dimension must be >= 1" );
+	if ( points.size() <= 1 ) { return 0.0; }
+
+	double total_weight = 0.0;
+	for ( const std::size_t w : weights ) { total_weight += static_cast<double>( w ); }
+	if ( total_weight <= 0.0 ) { return epsilon_estimation( points, min_pts ); }
+
+	const auto space = detail::bounding_box( points );
+	double effective_volume = 1.0;
+	std::size_t d_eff = 0;
+	for ( std::size_t i = 0; i < dimension; ++i ) {
+		const double extent = std::abs( static_cast<double>( space.second[i] - space.first[i] ) );
+		if ( extent > 0.0 ) {
+			effective_volume *= extent;
+			++d_eff;
+		}
+	}
+	if ( d_eff == 0 ) { return 1.0; }
+
+	const double d = static_cast<double>( d_eff );
+	const double space_per_minpts_points = ( effective_volume / total_weight ) * static_cast<double>( min_pts );
+	const double n_dim_unit_ball_vol = std::sqrt( std::pow( detail::pi, d ) ) / std::tgamma( d / 2.0 + 1.0 );
+	return std::pow( space_per_minpts_points / n_dim_unit_ball_vol, 1.0 / d );
+}
+
 
 // Alternative generating-distance heuristic: the k-distance knee (the classic DBSCAN
 // rule of thumb). Unlike epsilon_estimation, which assumes a uniform density over the
@@ -343,7 +439,8 @@ template <class T, std::size_t Dim, class Backend = NanoflannBackend<T, Dim>>
 std::vector<reachability_dist> compute_reachability_dists(
 	const std::vector<std::array<T, Dim>>& points, std::size_t min_pts,
 	double epsilon = -1.0, NeighborMode mode = NeighborMode::OnDemand, unsigned n_threads = 0,
-	CoreDistMode core_dist_mode = CoreDistMode::Scan, std::size_t max_precompute_bytes = 0 ) {
+	CoreDistMode core_dist_mode = CoreDistMode::Scan, std::size_t max_precompute_bytes = 0,
+	const std::vector<std::size_t>& weights = {} ) {
 
 	static_assert( std::is_floating_point_v<T>, "compute_reachability_dists: coordinate type 'T' must be float or double" );
 	static_assert( Dim >= 1, "compute_reachability_dists: dimension must be >= 1" );
@@ -351,6 +448,15 @@ std::vector<reachability_dist> compute_reachability_dists(
 
 	if ( min_pts < 1 ) { throw std::invalid_argument( "compute_reachability_dists: min_pts must be >= 1" ); }
 	if ( points.empty() ) { return {}; }
+
+	// Unique-point / weighted OPTICS (issue #46). When weights is non-empty each point stands for
+	// `weights[i]` identical original points, and the core-distance / neighborhood-count become
+	// weight-aware (see compute_core_dist_weighted). Empty weights => the unweighted path, byte for
+	// byte unchanged.
+	const bool weighted = !weights.empty();
+	if ( weighted && weights.size() != points.size() ) {
+		throw std::invalid_argument( "compute_reachability_dists: weights.size() must equal points.size()" );
+	}
 
 	double eps = epsilon;
 	if ( eps <= 0.0 ) {
@@ -361,7 +467,11 @@ std::vector<reachability_dist> compute_reachability_dists(
 		// lack it (e.g. Boost) fall back to the uniform estimate (if constexpr => zero overhead,
 		// and no knn_core_dist instantiation for backends without it). Both yield a positive
 		// scale for any >= 2-point input (degenerate inputs included), so no zero-radius collapse.
-		if constexpr ( KnnCoreDist<Backend, T, Dim> ) {
+		// Weighted mode uses the total-weight uniform estimate: knn_core_dist is not weight-aware
+		// (it fetches exactly min_pts neighbors), so the knee would mis-scale on a deduplicated cloud.
+		if ( weighted ) {
+			eps = epsilon_estimation( points, min_pts, weights );
+		} else if constexpr ( KnnCoreDist<Backend, T, Dim> ) {
 			eps = epsilon_estimation_knee<T, Dim, Backend>( points, min_pts );
 		} else {
 			eps = epsilon_estimation( points, min_pts );
@@ -449,6 +559,14 @@ std::vector<reachability_dist> compute_reachability_dists(
 	const auto core_dist_of = [&]( std::size_t idx, [[maybe_unused]] const std::vector<std::size_t>& nbrs ) -> std::optional<double> {
 		[[maybe_unused]] auto _s = _prof.scope( _prof.core_dist );
 		(void)core_dist_mode;  // unused when the backend lacks a knn_core_dist capability
+		// Weighted mode: the knn_core_dist fast path fetches exactly min_pts neighbors, which is
+		// wrong once neighbors carry weights (the min_pts-th cumulative-weight neighbor may be the
+		// 1st or the 100th), so weighted runs always Scan the eps-neighborhood. CoreDistMode::Knn
+		// silently downgrades to Scan here.
+		if ( weighted ) {
+			if constexpr ( reuse_dists ) { return detail::compute_core_dist_weighted_from_sq( *cur_sq, nbrs, weights, min_pts ); }
+			else { return detail::compute_core_dist_weighted( points[idx], points, nbrs, weights, min_pts ); }
+		}
 		if constexpr ( KnnCoreDist<Backend, T, Dim> ) {
 			if ( core_dist_mode == CoreDistMode::Knn ) {
 				return backend.knn_core_dist( points[idx], min_pts, eps_t );
@@ -514,22 +632,35 @@ std::vector<reachability_dist> compute_soptics_reachability_dists(
 		const std::vector<std::array<T, Dim>>& points, std::size_t min_pts,
 		double epsilon = -1.0, unsigned n_projections = 1024, unsigned k = 0,
 		std::size_t m = 0, unsigned seed = 42, unsigned n_threads = 0,
-		Metric metric = Metric::Cosine, double kernel_scale = 0.0 ) {
+		Metric metric = Metric::Cosine, double kernel_scale = 0.0,
+		const std::vector<std::size_t>& weights = {} ) {
 
 	static_assert( std::is_floating_point_v<T>, "compute_soptics_reachability_dists: coordinate type 'T' must be float or double" );
 	static_assert( Dim >= 1, "compute_soptics_reachability_dists: dimension must be >= 1" );
 	if ( min_pts < 1 ) { throw std::invalid_argument( "compute_soptics_reachability_dists: min_pts must be >= 1" ); }
 	if ( points.empty() ) { return {}; }
 
+	// Unique-point / weighted sOPTICS (issue #46). Same semantics as weighted OPTICS: the
+	// approximate core-distance becomes the distance at which the cumulative neighbor weight reaches
+	// min_pts. CEOs candidate generation is geometrically weight-independent (it operates on the
+	// unique points), and its default m = 2*min_pts UNIQUE candidates per vector only ever
+	// over-satisfies min_pts in weight terms, so no change is needed there. Empty weights => the
+	// unweighted path, unchanged. NOTE: exact dedup (upstream) merges bit-identical raw coords; two
+	// points that are scalar multiples (cosine-identical after normalization) are NOT merged.
+	const bool weighted = !weights.empty();
+	if ( weighted && weights.size() != points.size() ) {
+		throw std::invalid_argument( "compute_soptics_reachability_dists: weights.size() must equal points.size()" );
+	}
+
 	// Non-cosine metric: embed into random Fourier features whose cosine geometry
 	// approximates the target kernel, then run the cosine pipeline on the features. The
-	// result's point indices line up 1:1 with the input, so extraction is unchanged.
+	// result's point indices line up 1:1 with the input, so extraction (and weights) are unchanged.
 	if ( metric != Metric::Cosine ) {
 		constexpr std::size_t FeatDim = 256;  // 128 random frequencies (cos/sin pairs)
 		const double sigma = ( kernel_scale > 0.0 ) ? kernel_scale : detail::auto_kernel_scale( points, metric );
 		const auto feats = detail::embed_random_features<FeatDim, T, Dim>( points, metric, sigma, seed, n_threads );
 		return compute_soptics_reachability_dists<double, FeatDim>(
-			feats, min_pts, epsilon, n_projections, k, m, seed, n_threads, Metric::Cosine, 0.0 );
+			feats, min_pts, epsilon, n_projections, k, m, seed, n_threads, Metric::Cosine, 0.0, weights );
 	}
 
 	// L2-normalize onto the unit sphere (cosine metric). A zero-norm point (the origin)
@@ -574,7 +705,8 @@ std::vector<reachability_dist> compute_soptics_reachability_dists(
 		cur_sq = &neighbor_sq[idx];
 		return neighbors[idx];
 	};
-	const auto core_dist_of = [&]( std::size_t /*idx*/, const std::vector<std::size_t>& /*nbrs*/ ) -> std::optional<double> {
+	const auto core_dist_of = [&]( std::size_t /*idx*/, const std::vector<std::size_t>& nbrs ) -> std::optional<double> {
+		if ( weighted ) { return detail::compute_core_dist_weighted_from_sq( *cur_sq, nbrs, weights, min_pts ); }
 		return detail::compute_core_dist_from_sq( *cur_sq, min_pts );
 	};
 	const auto dist_of = [&]( std::size_t /*idx*/, std::size_t j, std::size_t /*o*/ ) -> double {
@@ -634,7 +766,7 @@ struct SDA {
 }  // namespace detail
 
 
-inline std::vector<chi_cluster_indices> get_chi_clusters_flat( const std::vector<reachability_dist>& reach_dists_, const double chi, std::size_t min_pts, double steep_area_min_diff = 0.0, std::size_t min_cluster_size = 0 ) {
+inline std::vector<chi_cluster_indices> get_chi_clusters_flat( const std::vector<reachability_dist>& reach_dists_, const double chi, std::size_t min_pts, double steep_area_min_diff = 0.0, std::size_t min_cluster_size = 0, const std::vector<std::size_t>& position_weights = {} ) {
 	// The Xi extractor's steep-area span cap and minimum cluster size. Historically these
 	// reused min_pts (the ordering's *density* parameter), which over-merges many tight,
 	// similar-density clusters at a moderate min_pts (issue #57). min_cluster_size > 0
@@ -644,6 +776,18 @@ inline std::vector<chi_cluster_indices> get_chi_clusters_flat( const std::vector
 	std::vector<std::pair<std::size_t, std::size_t>> clusters;
 	std::vector<detail::SDA> SDAs;
 	const std::size_t n_reachdists = reach_dists_.size();
+
+	// Unique-point / weighted OPTICS (issue #46): a span's "size" (the min-cluster-size check and
+	// the steep-area length cap) must count the ORIGINAL points the span covers, not the number of
+	// ordering positions -- otherwise a 2-unique-point steep area standing for 40k pixels is wrongly
+	// rejected. cumw is the prefix sum of per-position weights, so the weighted span [a,b) is
+	// cumw[b]-cumw[a]. When position_weights is empty every position weighs 1 and cumw[i]==i, so the
+	// math below is byte-for-byte the original position arithmetic (keeps chi_test_* pinned).
+	std::vector<std::size_t> cumw( n_reachdists + 1 );
+	for ( std::size_t i = 0; i < n_reachdists; ++i ) {
+		cumw[i + 1] = cumw[i] + ( position_weights.empty() ? std::size_t( 1 ) : position_weights[i] );
+	}
+
 	double mib( 0 );
 	double max_reach( 0.0 );
 	for ( const auto& r : reach_dists_ ) { if ( r.reach_dist > max_reach ) max_reach = r.reach_dist; }
@@ -674,24 +818,24 @@ inline std::vector<chi_cluster_indices> get_chi_clusters_flat( const std::vector
 			sda.mib = std::max( sda.mib, mib );
 		}
 	};
-	const auto get_sda_end = [&n_reachdists, &get_reach_dist, &mcs, &is_steep_down_pt]( const std::size_t start_idx ) -> std::size_t {
+	const auto get_sda_end = [&n_reachdists, &get_reach_dist, &mcs, &cumw, &is_steep_down_pt]( const std::size_t start_idx ) -> std::size_t {
 		assert( is_steep_down_pt( start_idx ) );
 		std::size_t last_sd_idx = start_idx;
 		std::size_t idx = start_idx + 1;
 		while ( idx < n_reachdists ) {
-			if ( idx - last_sd_idx >= mcs ) { return last_sd_idx; }
+			if ( cumw[idx] - cumw[last_sd_idx] >= mcs ) { return last_sd_idx; }
 			if ( get_reach_dist( idx ) > get_reach_dist( idx - 1 ) ) { return last_sd_idx; }
 			if ( is_steep_down_pt( idx ) ) { last_sd_idx = idx; }
 			idx++;
 		}
 		return std::max( n_reachdists - 2, last_sd_idx );
 	};
-	const auto get_sua_end = [&n_reachdists, &get_reach_dist, &mcs, &is_steep_up_pt]( const std::size_t start_idx ) -> std::size_t {
+	const auto get_sua_end = [&n_reachdists, &get_reach_dist, &mcs, &cumw, &is_steep_up_pt]( const std::size_t start_idx ) -> std::size_t {
 		assert( is_steep_up_pt( start_idx ) );
 		std::size_t last_su_idx = start_idx;
 		std::size_t idx = start_idx + 1;
 		while ( idx < n_reachdists ) {
-			if ( idx - last_su_idx >= mcs ) { return last_su_idx; }
+			if ( cumw[idx] - cumw[last_su_idx] >= mcs ) { return last_su_idx; }
 			if ( get_reach_dist( idx ) < get_reach_dist( idx - 1 ) ) { return last_su_idx; }
 			if ( is_steep_up_pt( idx ) ) { last_su_idx = idx; }
 			idx++;
@@ -721,13 +865,15 @@ inline std::vector<chi_cluster_indices> get_chi_clusters_flat( const std::vector
 		assert( false );
 		return { 0, 0 };
 	};
-	const auto valid_combination = [&chi, &steep_area_min_diff, &mcs, &get_reach_dist]( const detail::SDA& sda, std::size_t sua_begin_idx, std::size_t sua_end_idx ) -> bool {
+	const auto valid_combination = [&chi, &steep_area_min_diff, &mcs, &cumw, &get_reach_dist]( const detail::SDA& sda, std::size_t sua_begin_idx, std::size_t sua_end_idx ) -> bool {
 		const double f = std::max( chi, steep_area_min_diff );
 		if ( sda.mib > get_reach_dist( sua_end_idx + 1 ) * ( 1 - f ) ) { return false; }
 
 		std::size_t sda_middle = ( sda.begin_idx + ( sda.end_idx - sda.begin_idx ) / 2 );
 		std::size_t sua_middle = ( sua_begin_idx + ( sua_end_idx - sua_begin_idx ) / 2 );
-		if ( sua_middle - sda_middle < mcs - 2 ) {
+		// Weighted span between the two area midpoints (cumw[sua_middle]-cumw[sda_middle]); equals
+		// the original (sua_middle - sda_middle) position distance when unweighted.
+		if ( cumw[sua_middle] - cumw[sda_middle] < mcs - 2 ) {
 			return false;
 		}
 		return true;
@@ -826,8 +972,8 @@ inline std::vector<cluster_tree> flat_clusters_to_tree( const std::vector<chi_cl
 }
 
 
-inline std::vector<cluster_tree> get_chi_clusters( const std::vector<reachability_dist>& reach_dists, const double chi, std::size_t min_pts, const double steep_area_min_diff = 0.0, std::size_t min_cluster_size = 0 ) {
-	auto clusters_flat = get_chi_clusters_flat( reach_dists, chi, min_pts, steep_area_min_diff, min_cluster_size );
+inline std::vector<cluster_tree> get_chi_clusters( const std::vector<reachability_dist>& reach_dists, const double chi, std::size_t min_pts, const double steep_area_min_diff = 0.0, std::size_t min_cluster_size = 0, const std::vector<std::size_t>& position_weights = {} ) {
+	auto clusters_flat = get_chi_clusters_flat( reach_dists, chi, min_pts, steep_area_min_diff, min_cluster_size, position_weights );
 	return flat_clusters_to_tree( clusters_flat );
 }
 
@@ -949,10 +1095,27 @@ inline double default_threshold( const std::vector<reachability_dist>& reach, do
 // (unreached/UNDEFINED points become singletons). When `threshold < 0` (the default) an
 // educated default is used: a high percentile of the reachabilities (see
 // detail::default_threshold) -- no flat threshold is universally right, so inspect the plot.
+// `dedup` (default ON, issue #46): collapse bit-identical points to unique weighted points before
+// clustering, then expand the result back to ORIGINAL indices. This is the big win for color data
+// (a flat region of N identical pixels becomes one weighted point, so the O(neighborhood) cost for
+// that region vanishes) and is lossless -- the partition is the same as on the full cloud. Clouds
+// with no exact duplicates fall through to the plain unweighted path (byte-for-byte unchanged,
+// including the knee auto-epsilon), so dedup only ever helps. Set dedup=false to force the full cloud.
 template <class T, std::size_t Dim, class Backend = NanoflannBackend<T, Dim>>
 std::vector<std::vector<std::size_t>> cluster_threshold(
 	const std::vector<std::array<T, Dim>>& points, std::size_t min_pts, double threshold = -1.0,
-	double epsilon = -1.0, NeighborMode mode = NeighborMode::OnDemand, unsigned n_threads = 0 ) {
+	double epsilon = -1.0, NeighborMode mode = NeighborMode::OnDemand, unsigned n_threads = 0,
+	bool dedup = true ) {
+	if ( dedup ) {
+		const auto d = deduplicate( points );
+		if ( d.unique_points.size() < points.size() ) {  // actual collapse => weighted OPTICS
+			const auto reach = compute_reachability_dists<T, Dim, Backend>(
+				d.unique_points, min_pts, epsilon, mode, n_threads, CoreDistMode::Scan, 0, d.weights );
+			const double t = ( threshold < 0.0 ) ? detail::default_threshold( reach ) : threshold;
+			return expand_clusters_to_original( get_cluster_indices( reach, t ), d.unique_of_original );
+		}
+		// no duplicates: nothing to gain; use the unweighted path below (preserves knee auto-eps).
+	}
 	const auto reach = compute_reachability_dists<T, Dim, Backend>( points, min_pts, epsilon, mode, n_threads );
 	const double t = ( threshold < 0.0 ) ? detail::default_threshold( reach ) : threshold;
 	return get_cluster_indices( reach, t );
@@ -971,11 +1134,27 @@ std::vector<std::vector<std::size_t>> cluster_dbscan(
 // One-call hierarchical Xi (steep-area) extraction, FLATTENED to a list of clusters:
 // compute the ordering and run the Xi method. The nesting is discarded here -- use
 // get_chi_clusters(reach, chi, min_pts) for the cluster tree. `chi` defaults to 0.05.
+// `dedup` (default ON, issue #46): see cluster_threshold. When duplicates collapse, the Xi steep
+// areas are sized by ORIGINAL-point weight (so a few-unique-point but pixel-heavy area is not
+// wrongly rejected -- the position_weights argument to get_chi_clusters_flat), and the result is
+// expanded back to original indices. No-duplicate clouds use the plain unweighted path unchanged.
 template <class T, std::size_t Dim, class Backend = NanoflannBackend<T, Dim>>
 std::vector<std::vector<std::size_t>> extract_xi(
 	const std::vector<std::array<T, Dim>>& points, std::size_t min_pts, double chi = 0.05,
 	double epsilon = -1.0, NeighborMode mode = NeighborMode::OnDemand, unsigned n_threads = 0,
-	double steep_area_min_diff = 0.0, std::size_t min_cluster_size = 0 ) {
+	double steep_area_min_diff = 0.0, std::size_t min_cluster_size = 0, bool dedup = true ) {
+	if ( dedup ) {
+		const auto d = deduplicate( points );
+		if ( d.unique_points.size() < points.size() ) {  // actual collapse => weighted OPTICS + weighted Xi
+			const auto reach = compute_reachability_dists<T, Dim, Backend>(
+				d.unique_points, min_pts, epsilon, mode, n_threads, CoreDistMode::Scan, 0, d.weights );
+			// Per-ordering-position weights: the weight of the unique point sitting at each position.
+			std::vector<std::size_t> w_ord( reach.size() );
+			for ( std::size_t i = 0; i < reach.size(); ++i ) { w_ord[i] = d.weights[reach[i].point_index]; }
+			const auto flat = get_chi_clusters_flat( reach, chi, min_pts, steep_area_min_diff, min_cluster_size, w_ord );
+			return expand_clusters_to_original( get_cluster_indices( reach, flat ), d.unique_of_original );
+		}
+	}
 	const auto reach = compute_reachability_dists<T, Dim, Backend>( points, min_pts, epsilon, mode, n_threads );
 	const auto flat = get_chi_clusters_flat( reach, chi, min_pts, steep_area_min_diff, min_cluster_size );
 	return get_cluster_indices( reach, flat );
