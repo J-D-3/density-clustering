@@ -7,6 +7,13 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
 ## [Unreleased]
 
 ### Added
+- **Structured (FHT spinner) projections for sOPTICS** (#58, opt-in): `SopticsProjection::Structured`
+  replaces the Gaussian CEOs projection (`O(D·Dim)` per point) with random spinners
+  `x → H D₃ H D₂ H D₁ x` (sign-flip + fast Walsh-Hadamard transform, `O(D·log Dim)`; new
+  `include/optics/detail/hadamard.hpp`). Measured a **high-dimensional** win (~1.2–1.4× at ≥ 64-D,
+  unchanged recall) — *not* the low-dim small-`n` speedup the issue anticipated: at ≤ 16-D the
+  Gaussian dot is already cheap and the `n×D` materialization makes it break-even/worse, so the
+  default stays Gaussian. New `optics_soptics_proj_probe` benchmark; see `perf/README.md`.
 - **Weighted / unique-point OPTICS** (#46): collapse identical points to unique points carrying an
   integer weight and run weight-aware OPTICS on the small unique cloud — the same clustering as on
   the full cloud, far faster (a flat-color image region of N identical pixels becomes one point, so
@@ -92,6 +99,15 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
   `docs/benchmarking.md`.
 
 ### Changed
+- **sOPTICS auto-epsilon is now data-scaled** (#58): when `epsilon <= 0`,
+  `compute_soptics_reachability_dists` estimates a generating distance from the data
+  (`epsilon_estimation` on the unit-sphere points) instead of the old permissive `2.0` ("keep all
+  CEOs candidates"). The `2.0` default over-smoothed the reachability plot, which was harmless for a
+  hand-picked threshold cut but made **Xi** extraction badly under-segment in higher dimensions —
+  the entire "16-D quality dip" (cos-blobs-16d ARI **0.57 → 0.82**, matching exact OPTICS/HDBSCAN).
+  Investigation (`optics_soptics_param_probe`) showed the dip was this eps mismatch, **not** CEOs
+  recall: a `D`/`k`/`m` sweep leaves the score unchanged. Pass an explicit `epsilon` for the old
+  behavior. A pre-1.0 behavior change toward the API freeze (#49).
 - **`cluster_threshold` and `extract_xi` now deduplicate by default** (#46): they collapse
   bit-identical points, cluster the weighted unique cloud, and expand the labels back to the original
   indices. The result is the same partition as before on data with no exact duplicates (those clouds

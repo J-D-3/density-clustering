@@ -92,6 +92,11 @@ target_link_libraries(optics_soptics_reuse_probe PRIVATE optics::optics)
 add_executable(optics_soptics_proj_probe Benchmark/soptics_proj_probe.cpp)
 target_link_libraries(optics_soptics_proj_probe PRIVATE optics::optics)
 
+# sOPTICS CEOs-parameter sweep (#58): Rand vs exact on a hard 16-D dataset over (D,k,m), to set the
+# high-dimension defaults from data. Release config; not a ctest.
+add_executable(optics_soptics_param_probe Benchmark/soptics_param_probe.cpp)
+target_link_libraries(optics_soptics_param_probe PRIVATE optics::optics)
+
 # HNSW recall-vs-speed probe (#47): HNSW vs exact / eps-approx nanoflann in high-D. Only
 # built with the optional HNSW backend enabled. Release config; not a ctest.
 if(OPTICS_ENABLE_HNSW)

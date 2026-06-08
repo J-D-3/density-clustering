@@ -722,9 +722,15 @@ std::vector<reachability_dist> compute_soptics_reachability_dists(
 		}
 	}
 
-	// On the unit sphere all Euclidean distances lie in [0, 2]; the permissive default
-	// keeps every CEOs candidate (the pool is bounded by ~2*k*m anyway).
-	const double eps = ( epsilon <= 0.0 ) ? 2.0 : epsilon;
+	// Auto-epsilon: a DATA-SCALED generating distance (the uniform-density estimate on the unit
+	// sphere), mirroring exact OPTICS. The old permissive default (2.0, "keep every CEOs candidate")
+	// over-smooths the reachability plot -- fine for a hand-picked threshold cut, but it makes Xi
+	// steep-area extraction under-segment badly in higher dimensions (issue #58: cos-blobs-16d ARI
+	// 0.33 -> 0.82, recovering the exact-OPTICS score; the dip was this eps mismatch, NOT CEOs
+	// recall, which a D/k/m sweep leaves unchanged). epsilon_estimation needs no backend, so it fits
+	// sOPTICS's backend-free design. Distances on the unit sphere still lie in [0, 2]; the candidate
+	// pool is bounded by ~2*k*m regardless. Pass an explicit epsilon to override.
+	const double eps = ( epsilon <= 0.0 ) ? epsilon_estimation( unit, min_pts ) : epsilon;
 
 	detail::CeosParams params;
 	params.n_projections = n_projections;

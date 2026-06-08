@@ -1720,6 +1720,50 @@ TEST_CASE("sOPTICS structured projections (#58): agrees with exact OPTICS; seed-
 }
 
 
+TEST_CASE("sOPTICS auto-eps recovers high-D Xi clusters (#58 16-D dip)") {
+	// cos-blobs-16d shape: k angular clusters with jitter, normalized -- the case where sOPTICS used
+	// to dip (ARI 0.57 vs 0.82) purely from its old eps=2.0 default over-smoothing the reachability
+	// plot for Xi. The data-scaled auto-eps now tracks exact OPTICS again. (A CEOs D/k/m change does
+	// NOT move this -- recall was never the bottleneck.)
+	constexpr std::size_t Dim = 16;
+	std::mt19937 rng( 0 );
+	std::normal_distribution<double> g( 0.0, 1.0 );
+	const std::size_t k = 6, per = 200;
+	std::vector<std::array<double, Dim>> centers( k );
+	for ( auto& c : centers ) {
+		double s = 0.0;
+		for ( auto& v : c ) { v = g( rng ); s += v * v; }
+		s = std::sqrt( s );
+		for ( auto& v : c ) { v /= s; }
+	}
+	std::vector<std::array<double, Dim>> pts;
+	for ( std::size_t i = 0; i < k; ++i ) {
+		for ( std::size_t j = 0; j < per; ++j ) {
+			std::array<double, Dim> p;
+			double s = 0.0;
+			for ( std::size_t d = 0; d < Dim; ++d ) { p[d] = centers[i][d] + 0.12 * g( rng ); s += p[d] * p[d]; }
+			s = std::sqrt( s );
+			for ( auto& v : p ) { v /= s; }
+			pts.push_back( p );
+		}
+	}
+	const std::size_t n = pts.size();
+	const std::size_t mp = 10;
+	const double eps_est = optics::epsilon_estimation( pts, mp );
+
+	auto xi = [&]( const std::vector<optics::reachability_dist>& r ) {
+		return labels_from_clusters( n, optics::get_cluster_indices( r, optics::get_chi_clusters_flat( r, 0.05, mp ) ) );
+	};
+	const auto exact_xi = xi( optics::compute_reachability_dists( pts, mp, eps_est ) );
+	const auto auto_xi = xi( optics::compute_soptics_reachability_dists( pts, mp ) );        // data-scaled default
+	const auto old_xi = xi( optics::compute_soptics_reachability_dists( pts, mp, 2.0 ) );    // old eps=2.0 default
+
+	// Auto-eps sOPTICS Xi tracks exact OPTICS Xi; the old eps=2.0 default does markedly worse.
+	CHECK( rand_index( exact_xi, auto_xi ) > 0.9 );
+	CHECK( rand_index( exact_xi, auto_xi ) > rand_index( exact_xi, old_xi ) );
+}
+
+
 #ifdef OPTICS_ENABLE_BOOST_RTREE
 // Only built when the optional Boost backend is enabled. Verifies that the Boost
 // R*-tree backend is interchangeable with nanoflann (issue #27): identical
