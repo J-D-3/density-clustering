@@ -28,7 +28,9 @@
 //     fast Walsh-Hadamard transform, three rounds) approximate Gaussian projections at
 //     O(D log Dim) per point instead of O(D*Dim). The whole n x D projection table is
 //     materialized once (O(n*D) memory) because the FHT produces all of a block's outputs
-//     together. Lowers the projection cost that dominates sOPTICS at small/low-dim scales.
+//     together. This is a HIGH-DIMENSION optimization: measured ~1.2-1.4x faster at >= 64-D with
+//     unchanged recall, but break-even at ~16-D and recall-lossy at very low Dim (the Hadamard
+//     block next_pow2(Dim) is tiny there), so the default stays Gaussian. See perf/README.md.
 
 #include "hadamard.hpp"
 #include "math.hpp"

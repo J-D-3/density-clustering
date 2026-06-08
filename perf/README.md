@@ -245,3 +245,27 @@ contrast):
 cmake --build build --config Release --target optics_approx_probe
 ./build/test/Release/optics_approx_probe color3d.csv uniform16d.csv 10
 ```
+
+### sOPTICS projections: Gaussian vs structured/FHT (`optics_soptics_proj_probe`, #58)
+
+sOPTICS's CEOs step projects every point onto `D` random vectors. The default **Gaussian** backend
+dots each point with `D` explicit `N(0,1)` vectors — `O(D·Dim)` per point, computed on the fly. The
+opt-in **structured** backend uses FHT "spinners" (`x → H D₃ H D₂ H D₁ x`) — `O(D·log Dim)` per
+point — but must materialize the `n×D` projection table. Whether that pays depends on dimension
+(normalized blobs, `D=1024`, `n≈9 600`, Rand vs exact OPTICS):
+
+| Dim | exact OPTICS | Gaussian sOPTICS (Rand) | structured sOPTICS (Rand) | structured speedup |
+|-----|--------------|-------------------------|---------------------------|--------------------|
+| 3   |   355 ms     | 310 ms (1.00)           | 225 ms (**0.88**)         | faster, recall dip |
+| 16  |   411 ms     | 421 ms (1.00)           | 512 ms (1.00)             | ~1.2× **slower**   |
+| 64  |   840 ms     | 745 ms (1.00)           | 629 ms (1.00)             | ~1.2× faster       |
+| 128 | 1 840 ms     | 818 ms (1.00)           | 590 ms (1.00)             | ~1.4× faster       |
+
+**Finding (corrects the issue-#58 premise).** FHT spinners help the **high-dimensional** regime
+(≥ ~64-D: ~1.2–1.4× faster at equal recall), *not* the low-dim small-`n` crossover. At low `Dim` the
+Gaussian `O(D·Dim)` dot product is already cheap, so the structured path's `n×D` materialization and
+memory traffic make it break-even (16-D) or worse; and at 3-D the Hadamard block (`next_pow2(3)=4`)
+is so small that the spinners are too correlated and recall drops to ~0.88. So **the default stays
+Gaussian**; pass `SopticsProjection::Structured` only for genuinely high-dimensional data (where it
+compounds sOPTICS's existing high-D win over exact OPTICS — 590 ms vs 1 840 ms at 128-D). Reproduce:
+`optics_soptics_proj_probe [scale]`.

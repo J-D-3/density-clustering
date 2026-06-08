@@ -664,9 +664,10 @@ std::vector<reachability_dist> compute_reachability_dists(
 //                   heuristic. Ignored for Cosine.
 //   projection    : CEOs projection backend (issue #58). Gaussian (default) dots each point with
 //                   D explicit N(0,1) vectors. Structured uses FHT "spinners" -- O(D log Dim) per
-//                   point instead of O(D*Dim), at the cost of materializing the n x D table -- which
-//                   lowers the projection overhead that makes sOPTICS slower than exact OPTICS at
-//                   small scale. Approximate either way (validated by Rand agreement, not bit-identity).
+//                   point instead of O(D*Dim), at the cost of materializing the n x D table. It is a
+//                   HIGH-DIMENSION optimization (~1.2-1.4x at >= 64-D, unchanged recall; break-even
+//                   at ~16-D, recall-lossy at very low Dim), so default Gaussian. See perf/README.md.
+//                   Approximate either way (validated by Rand agreement, not bit-identity).
 template <class T, std::size_t Dim>
 std::vector<reachability_dist> compute_soptics_reachability_dists(
 		const std::vector<std::array<T, Dim>>& points, std::size_t min_pts,
