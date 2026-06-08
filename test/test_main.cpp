@@ -1529,6 +1529,36 @@ TEST_CASE("weighted eps: total-weight estimate matches the expanded full cloud (
 }
 
 
+TEST_CASE("weighted knee epsilon: within-cluster scale; weighted k-distance (#46)") {
+	// Tight blobs, replicated into exact duplicates carrying weights.
+	const auto base = optics::testdata::make_blobs<double, 2>( 6, 40, 60.0, 0.5, 31u );
+	std::vector<std::array<double, 2>> full;
+	std::mt19937 rng( 2 );
+	for ( const auto& p : base ) {
+		const int reps = 1 + static_cast<int>( rng() % 3 );
+		for ( int r = 0; r < reps; ++r ) { full.push_back( p ); }
+	}
+	const auto d = optics::deduplicate( full );
+	const std::size_t mp = 6;
+
+	const double knee = optics::epsilon_estimation_knee<double, 2>( d.unique_points, mp, d.weights );
+	const double unif = optics::epsilon_estimation( d.unique_points, mp, d.weights );
+	CHECK( knee > 0.0 );
+	CHECK( knee < unif );  // knee tracks the within-cluster scale; uniform over-shoots on clustered data
+
+	// Backend: weighted k-distance with all-ones weights == the unweighted k-distance.
+	const optics::NanoflannBackend<double, 2> be( d.unique_points );
+	const std::vector<std::size_t> ones( d.unique_points.size(), 1 );
+	for ( std::size_t i = 0; i < std::min<std::size_t>( 5, d.unique_points.size() ); ++i ) {
+		const auto w = be.knn_core_dist_weighted( d.unique_points[i], ones, mp );
+		const auto u = be.knn_core_dist( d.unique_points[i], mp, 1e18 );
+		REQUIRE( w.has_value() );
+		REQUIRE( u.has_value() );
+		CHECK( *w == doctest::Approx( *u ) );
+	}
+}
+
+
 TEST_CASE("Xi weighted spans: all-ones position weights are identical to unweighted (#46)") {
 	// The prefix-sum threading must not perturb the extractor when every weight is 1
 	// (this is what keeps the pinned chi_test_* green). Same hand-crafted ordering as the
@@ -1580,6 +1610,47 @@ TEST_CASE("weighted sOPTICS: empty weights unchanged; dedup agrees with full (#4
 	const auto exp = optics::expand_clusters_to_original( optics::get_cluster_indices( wreach, thr ), d.unique_of_original );
 	const auto dedup_lbl = labels_from_clusters( n, exp );
 	CHECK( rand_index( full_lbl, dedup_lbl ) > 0.85 );
+}
+
+
+TEST_CASE("deduplicate_cosine: collapses same-direction points; weighted sOPTICS agrees (#46)") {
+	// Scalar multiples share a direction (cosine-identical) but differ bit-for-bit, so raw
+	// deduplicate keeps them apart while deduplicate_cosine (with a small quantum) merges them.
+	std::vector<std::array<double, 3>> pts = {
+		{ 1, 2, 3 }, { 2, 4, 6 }, { 10, 20, 30 },  // one direction (x3)
+		{ 1, 0, 0 }, { 5, 0, 0 },                  // one direction (x2)
+		{ 0, 1, 0 } };                             // distinct
+	const auto dc = optics::deduplicate_cosine( pts, 1e-6 );
+	CHECK( dc.unique_points.size() == 3 );
+	std::size_t sumw = 0;
+	for ( const auto w : dc.weights ) { sumw += w; }
+	CHECK( sumw == pts.size() );
+	CHECK( optics::deduplicate( pts ).unique_points.size() == 6 );  // raw dedup keeps all 6
+
+	// End-to-end: weighted sOPTICS on the cosine-deduped cloud agrees with full sOPTICS.
+	const auto blobs = optics::testdata::make_blobs<double, 3>( 4, 60, 30.0, 1.0, 808u );
+	std::vector<std::array<double, 3>> full;
+	std::mt19937 rng( 11 );
+	for ( const auto& p : blobs ) {  // replicate each point at several brightnesses (same direction)
+		const int reps = 1 + static_cast<int>( rng() % 3 );
+		for ( int r = 0; r < reps; ++r ) {
+			const double s = 1.0 + 0.5 * static_cast<double>( r );
+			full.push_back( { p[0] * s, p[1] * s, p[2] * s } );
+		}
+	}
+	const std::size_t n = full.size();
+	const std::size_t mp = 6;
+	const double eps = 0.3;
+	const auto a = optics::compute_soptics_reachability_dists( full, mp, eps, 256u, 16u, std::size_t{ 32 }, 7u );
+	const auto d2 = optics::deduplicate_cosine( full, 1e-4 );
+	CHECK( d2.unique_points.size() < full.size() );  // brightness variants collapsed
+	const auto wr = optics::compute_soptics_reachability_dists(
+		d2.unique_points, mp, eps, 256u, 16u, std::size_t{ 32 }, 7u, 0u, optics::Metric::Cosine, 0.0, d2.weights );
+	const double thr = 0.5 * eps;
+	const auto la = labels_from_clusters( n, optics::get_cluster_indices( a, thr ) );
+	const auto exp2 = optics::expand_clusters_to_original( optics::get_cluster_indices( wr, thr ), d2.unique_of_original );
+	const auto lb = labels_from_clusters( n, exp2 );
+	CHECK( rand_index( la, lb ) > 0.8 );
 }
 
 

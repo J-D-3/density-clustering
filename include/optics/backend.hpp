@@ -71,6 +71,15 @@ concept RadiusSearchWithDists = std::is_same_v<T, double> &&
     b.radius_search_with_dists(p, r, out, out_sq);
 };
 
+// Optional capability: a backend that can answer the WEIGHTED k-distance (the distance at which the
+// cumulative neighbor weight reaches min_pts) for the weighted-knee epsilon estimator (issue #46);
+// detected with `if constexpr`.
+template <class B, class T, std::size_t Dim>
+concept KnnCoreDistWeighted = requires(const B b, const std::array<T, Dim>& p,
+                                       const std::vector<std::size_t>& w, std::size_t k) {
+    b.knn_core_dist_weighted(p, w, k);
+};
+
 namespace detail {
 
 // nanoflann dataset adaptor that reads the user's std::vector<std::array<T,Dim>>
@@ -168,6 +177,34 @@ public:
         // epsilon_estimation_knee) does not overflow r*r. Exact for double T (the pinned Knn path).
         if (static_cast<double>(kth_sq) > static_cast<double>(r) * static_cast<double>(r)) return std::nullopt;
         return std::sqrt(static_cast<double>(kth_sq));
+    }
+
+    // Weighted k-distance for the weighted-knee epsilon estimator (issue #46): the distance at which
+    // the cumulative neighbor weight (nearest first, the point itself included) first reaches min_pts.
+    // Because every weight is >= 1, that threshold is always reached within the min_pts nearest
+    // points, so a k = min_pts k-NN query suffices -- same cost as knn_core_dist. weights is indexed
+    // by point index. nullopt if the whole cloud's weight near p stays below min_pts.
+    std::optional<double> knn_core_dist_weighted(const Point& p, const std::vector<std::size_t>& weights,
+                                                 std::size_t min_pts) const {
+        const std::size_t k = std::min<std::size_t>(min_pts, adaptor_.kdtree_get_point_count());
+        if (k == 0) return std::nullopt;
+        thread_local std::vector<std::size_t> idx;
+        thread_local std::vector<T> dist_sq;
+        idx.resize(k);
+        dist_sq.resize(k);
+        nanoflann::KNNResultSet<T, std::size_t> result_set(k);
+        result_set.init(idx.data(), dist_sq.data());
+        nanoflann::SearchParameters params;
+        params.eps = search_eps;
+        index_.findNeighbors(result_set, p.data(), params);
+        const std::size_t found = result_set.size();
+        // KNNResultSet keeps results in ascending distance order; accumulate weights along it.
+        std::size_t acc = 0;
+        for (std::size_t j = 0; j < found; ++j) {
+            acc += weights[idx[j]];
+            if (acc >= min_pts) return std::sqrt(static_cast<double>(dist_sq[j]));
+        }
+        return std::nullopt;
     }
 
 private:

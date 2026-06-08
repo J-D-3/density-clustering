@@ -7,6 +7,24 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
 ## [Unreleased]
 
 ### Added
+- **Weighted / unique-point OPTICS** (#46): collapse identical points to unique points carrying an
+  integer weight and run weight-aware OPTICS on the small unique cloud — the same clustering as on
+  the full cloud, far faster (a flat-color image region of N identical pixels becomes one point, so
+  its O(neighborhood²) ordering cost vanishes). New `include/optics/preprocess.hpp` exposes
+  `deduplicate` (lossless, bit-identical merge, first-seen order), `expand_clusters_to_original`, and
+  `quantize` (lossy grid snap that lets near-identical colors — JPEG/DCT artifacts, gradients — merge
+  too; composes as `quantize → deduplicate`). `deduplicate_cosine` additionally merges points by
+  *direction* (scalar multiples — same hue, different brightness), matching sOPTICS's cosine metric;
+  pass a `quantum > 0` to bin near-identical directions robustly. `compute_reachability_dists` and
+  `compute_soptics_reachability_dists` gained an optional trailing `weights` argument (empty ⇒ the
+  unweighted path, byte-for-byte unchanged); core-distance / `min_pts` / reachability follow
+  scikit-learn DBSCAN's `sample_weight` semantics (neighborhood weight = Σ weights within ε incl.
+  self; core iff ≥ `min_pts`; core-distance = the distance at which the cumulative weight reaches
+  `min_pts`). `epsilon_estimation` gained a total-weight overload, and `get_chi_clusters[_flat]` an
+  optional `position_weights` so Xi steep-area spans count original points (a prefix sum; empty ⇒
+  byte-identical to before, so the `chi_test_*` cases are unchanged). Measured exact collapse ≈ 8–10×
+  on photos; voxel `bin=4`/`bin=8` push it to ≈ 33×/120×. Pinned by partition-equivalence tests
+  (weighted-on-dedup == unweighted-on-full).
 - **Optional HNSW approximate backend** `HnswBackend<T,Dim>` (`include/optics/hnsw_backend.hpp`, behind
   `OPTICS_ENABLE_HNSW`, OFF by default; vendored header-only hnswlib under `include/optics/hnswlib/`,
   Apache-2.0). Models the `NeighborSearch` concept (radius search via hnswlib's native epsilon range search —
@@ -74,6 +92,14 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
   `docs/benchmarking.md`.
 
 ### Changed
+- **`cluster_threshold` and `extract_xi` now deduplicate by default** (#46): they collapse
+  bit-identical points, cluster the weighted unique cloud, and expand the labels back to the original
+  indices. The result is the same partition as before on data with no exact duplicates (those clouds
+  take the unchanged unweighted path, including the knee auto-epsilon); on data **with** duplicates
+  the partition is the lossless weighted equivalent (identical points are never split). Opt out with
+  the new trailing `dedup = false` argument. The low-level `compute_reachability_dists` is unchanged
+  (it deduplicates only when you pass `weights`). A deliberate pre-1.0 behavior change toward the API
+  freeze (#49).
 - **Auto-epsilon now defaults to the k-distance-knee estimator** (`epsilon_estimation_knee`) instead of
   the uniform-density `epsilon_estimation`, across `compute_reachability_dists` and the `cluster_threshold`
   / `extract_xi` wrappers. The uniform estimate over-shoots on clustered data, which slows the dense path

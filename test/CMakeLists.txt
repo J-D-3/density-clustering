@@ -62,6 +62,11 @@ target_link_libraries(optics_approx_probe PRIVATE optics::optics)
 add_executable(optics_mode_compare Benchmark/mode_compare.cpp)
 target_link_libraries(optics_mode_compare PRIVATE optics::optics)
 
+# Unique-point / weighted OPTICS speedup (#46): full-cloud vs deduplicate + weighted ordering on
+# CSV clouds (e.g. color images), at the same epsilon. Release config; not a ctest.
+add_executable(optics_dedup_probe Benchmark/dedup_probe.cpp)
+target_link_libraries(optics_dedup_probe PRIVATE optics::optics)
+
 # sOPTICS vs exact OPTICS: clustering quality (Rand index) + timing on synthetic
 # normalized blobs. Release config; not a ctest.
 add_executable(optics_soptics_compare Benchmark/soptics_compare.cpp)

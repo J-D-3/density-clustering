@@ -356,13 +356,35 @@ double epsilon_estimation( const std::vector<Point<T, dimension>>& points, std::
 }
 
 
+namespace detail {
+// Kneedle: given a set of k-distances, return the "knee" -- the value at the index of maximum
+// perpendicular distance to the chord joining the first and last (sorted) sample. Below the knee
+// points sit inside dense regions, above it they are sparse/noise, so the knee is the within-cluster
+// scale. Sorts k_dist in place. Returns <= 0.0 to signal a degenerate curve (empty, or all-zero),
+// so the caller can fall back to the uniform-density estimate (auto-eps must never collapse to 0).
+inline double kneedle( std::vector<double>& k_dist ) {
+	if ( k_dist.size() < 3 ) { return k_dist.empty() ? -1.0 : k_dist.back(); }
+	std::sort( k_dist.begin(), k_dist.end() );  // ascending
+	const std::size_t m = k_dist.size();
+	const double y0 = k_dist.front();
+	const double dx = static_cast<double>( m - 1 );
+	const double dy = k_dist.back() - y0;
+	const double norm = std::sqrt( dx * dx + dy * dy );
+	if ( norm <= 0.0 ) { return k_dist.back(); }  // flat curve: that value (0 => caller falls back)
+	double best_metric = -1.0;
+	std::size_t best_i = m - 1;
+	for ( std::size_t i = 0; i < m; ++i ) {
+		const double d = std::abs( dy * static_cast<double>( i ) - dx * ( k_dist[i] - y0 ) ) / norm;
+		if ( d > best_metric ) { best_metric = d; best_i = i; }
+	}
+	return k_dist[best_i];
+}
+}  // namespace detail
+
 // Alternative generating-distance heuristic: the k-distance knee (the classic DBSCAN
 // rule of thumb). Unlike epsilon_estimation, which assumes a uniform density over the
 // bounding box and so over-estimates epsilon on clustered data, this looks at the actual
-// k-nearest-neighbor (k = min_pts) distances: sort them ascending and take the "knee" --
-// the point of maximum distance to the chord joining the first and last sample
-// (Kneedle-style). Below the knee points sit inside dense regions; above it they are
-// sparse/noise, so the knee separates the two scales without the uniform-density bias.
+// k-nearest-neighbor (k = min_pts) distances and takes the "knee" (see detail::kneedle).
 //
 // Opt-in: callers pass the result as `epsilon` to compute_reachability_dists; the default
 // path is unchanged. Requires a backend modeling KnnCoreDist (e.g. NanoflannBackend).
@@ -386,30 +408,38 @@ double epsilon_estimation_knee( const std::vector<std::array<T, Dim>>& points, s
 		const auto cd = backend.knn_core_dist( p, min_pts, no_cap );
 		if ( cd.has_value() ) { k_dist.push_back( *cd ); }
 	}
-	if ( k_dist.size() < 3 ) {
-		return ( k_dist.empty() || k_dist.back() <= 0.0 ) ? epsilon_estimation( points, min_pts ) : k_dist.back();
-	}
+	const double knee = detail::kneedle( k_dist );
+	return knee > 0.0 ? knee : epsilon_estimation( points, min_pts );
+}
 
-	std::sort( k_dist.begin(), k_dist.end() );  // ascending
-	// Knee = index maximizing perpendicular distance to the chord (0, k_dist.front()) ->
-	// (m-1, k_dist.back()). |dy*(i) - dx*(k_dist[i]-y0)| / |chord| is maximal at the bend.
-	const std::size_t m = k_dist.size();
-	const double y0 = k_dist.front();
-	const double dx = static_cast<double>( m - 1 );
-	const double dy = k_dist.back() - y0;
-	const double norm = std::sqrt( dx * dx + dy * dy );
-	// Flat curve (every k-distance equal). If that value is positive it is the scale; if it
-	// is 0 (e.g. all-identical points) defer to the uniform estimate so auto-eps never collapses.
-	if ( norm <= 0.0 ) { return k_dist.back() > 0.0 ? k_dist.back() : epsilon_estimation( points, min_pts ); }
-	double best_metric = -1.0;
-	std::size_t best_i = m - 1;
-	for ( std::size_t i = 0; i < m; ++i ) {
-		const double d = std::abs( dy * static_cast<double>( i ) - dx * ( k_dist[i] - y0 ) ) / norm;
-		if ( d > best_metric ) { best_metric = d; best_i = i; }
+// Weighted-knee epsilon for unique-point OPTICS (issue #46): the knee of the WEIGHTED k-distances
+// (the distance at which each point's cumulative neighbor weight reaches min_pts), so the estimate
+// tracks the within-cluster scale on a deduplicated cloud instead of the uniform-density over-shoot.
+// Each weight is >= 1, so the weighted k-distance is found within the min_pts nearest points -- the
+// per-point cost matches the unweighted knee. Requires a backend modeling KnnCoreDistWeighted.
+template <class T, std::size_t Dim, class Backend = NanoflannBackend<T, Dim>>
+double epsilon_estimation_knee( const std::vector<std::array<T, Dim>>& points, std::size_t min_pts,
+								const std::vector<std::size_t>& weights ) {
+	static_assert( std::is_floating_point_v<T>, "epsilon_estimation_knee: coordinate type 'T' must be float or double" );
+	static_assert( Dim >= 1, "epsilon_estimation_knee: dimension must be >= 1" );
+	static_assert( KnnCoreDistWeighted<Backend, T, Dim>,
+		"weighted epsilon_estimation_knee requires a backend modeling KnnCoreDistWeighted (e.g. NanoflannBackend)" );
+	if ( min_pts < 1 ) { throw std::invalid_argument( "epsilon_estimation_knee: min_pts must be >= 1" ); }
+	if ( weights.size() != points.size() ) { throw std::invalid_argument( "epsilon_estimation_knee: weights.size() must equal points.size()" ); }
+	double total_weight = 0.0;
+	for ( const std::size_t w : weights ) { total_weight += static_cast<double>( w ); }
+	// Too little total weight for a k-distance curve: defer to the (weighted) uniform heuristic.
+	if ( points.size() <= 1 || total_weight <= static_cast<double>( min_pts ) ) { return epsilon_estimation( points, min_pts, weights ); }
+
+	const Backend backend( points );
+	std::vector<double> k_dist;
+	k_dist.reserve( points.size() );
+	for ( const auto& p : points ) {
+		const auto cd = backend.knn_core_dist_weighted( p, weights, min_pts );
+		if ( cd.has_value() ) { k_dist.push_back( *cd ); }
 	}
-	// A positive knee is the within-cluster scale; a non-positive one (degenerate input)
-	// defers to the uniform estimate so auto-eps never collapses to a zero radius.
-	return k_dist[best_i] > 0.0 ? k_dist[best_i] : epsilon_estimation( points, min_pts );
+	const double knee = detail::kneedle( k_dist );
+	return knee > 0.0 ? knee : epsilon_estimation( points, min_pts, weights );
 }
 
 
@@ -467,10 +497,15 @@ std::vector<reachability_dist> compute_reachability_dists(
 		// lack it (e.g. Boost) fall back to the uniform estimate (if constexpr => zero overhead,
 		// and no knn_core_dist instantiation for backends without it). Both yield a positive
 		// scale for any >= 2-point input (degenerate inputs included), so no zero-radius collapse.
-		// Weighted mode uses the total-weight uniform estimate: knn_core_dist is not weight-aware
-		// (it fetches exactly min_pts neighbors), so the knee would mis-scale on a deduplicated cloud.
+		// Weighted mode: prefer the WEIGHTED k-distance knee (tracks the within-cluster scale on a
+		// deduplicated cloud); fall back to the total-weight uniform estimate for backends that can't
+		// answer a weighted k-distance.
 		if ( weighted ) {
-			eps = epsilon_estimation( points, min_pts, weights );
+			if constexpr ( KnnCoreDistWeighted<Backend, T, Dim> ) {
+				eps = epsilon_estimation_knee<T, Dim, Backend>( points, min_pts, weights );
+			} else {
+				eps = epsilon_estimation( points, min_pts, weights );
+			}
 		} else if constexpr ( KnnCoreDist<Backend, T, Dim> ) {
 			eps = epsilon_estimation_knee<T, Dim, Backend>( points, min_pts );
 		} else {
