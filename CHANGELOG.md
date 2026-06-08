@@ -7,6 +7,15 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
 ## [Unreleased]
 
 ### Added
+- **Optional HNSW approximate backend** `HnswBackend<T,Dim>` (`include/optics/hnsw_backend.hpp`, behind
+  `OPTICS_ENABLE_HNSW`, OFF by default; vendored header-only hnswlib under `include/optics/hnswlib/`,
+  Apache-2.0). Models the `NeighborSearch` concept (radius search via hnswlib's native epsilon range search —
+  a single graph traversal) and the optional `KnnCoreDist` capability. **Measured (new `optics_hnsw_probe`
+  recall/speed harness, adaptive ~30-NN radius, n≈19k):** HNSW's query time is essentially dimension-independent
+  (~55–80 ms across 16–128-D) while the exact KD-tree grows with D (34 → 82 → 224 ms) — they **cross over at
+  ~64-D**, with HNSW ~2.8× faster by 128-D (recall ~0.92–0.99, tunable via M / ef). At the 16-D target the exact
+  KD-tree is still ~2× faster, so nanoflann stays the default and HNSW is the high-D (≥64-D) tool. Gated test
+  verifies the concept + recall + end-to-end clustering (#47).
 - **Non-Euclidean metrics for sOPTICS** (`Metric` enum + `metric` / `kernel_scale` arguments on
   `compute_soptics_reachability_dists`): `Metric::L2` and `Metric::L1` embed points into random Fourier
   features (`include/optics/detail/random_features.hpp`) whose cosine similarity approximates the

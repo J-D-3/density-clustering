@@ -191,3 +191,7 @@ using ApproxNanoflannBackend = NanoflannBackend<T, Dim, ApproxEpsPermille>;
 #ifdef OPTICS_ENABLE_BOOST_RTREE
 #include "boost_backend.hpp"
 #endif
+
+#ifdef OPTICS_ENABLE_HNSW
+#include "hnsw_backend.hpp"
+#endif

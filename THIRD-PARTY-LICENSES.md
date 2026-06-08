@@ -7,12 +7,14 @@ the copyright notices are retained in the vendored source files as well.
 | Component | Where | License | Scope |
 |-----------|-------|---------|-------|
 | nanoflann | `include/optics/nanoflann.hpp` | BSD 2-Clause | **runtime** (default neighbor-search backend) |
+| hnswlib   | `include/optics/hnswlib/`      | Apache-2.0   | **runtime, opt-in** (HNSW backend, only with `OPTICS_ENABLE_HNSW`) |
 | doctest   | `test/third_party/doctest.h`   | MIT          | test-only |
 | nanobench | `test/third_party/nanobench.h` | MIT          | test-only (perf harness) |
 
-Only **nanoflann** is part of the library you compile against; doctest and
-nanobench are used solely to build the tests/benchmarks and are not required to
-use OPTICS-Clustering.
+Only **nanoflann** is part of the default library you compile against. **hnswlib** is
+vendored but compiled only when the optional `OPTICS_ENABLE_HNSW` backend is enabled (off
+by default). doctest and nanobench are used solely to build the tests/benchmarks and are
+not required to use OPTICS-Clustering.
 
 ---
 
@@ -42,6 +44,18 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+---
+
+## hnswlib — Apache License 2.0
+
+Copyright Yury Malkov and the hnswlib contributors (https://github.com/nmslib/hnswlib).
+
+Licensed under the Apache License, Version 2.0. The full license text is vendored
+alongside the headers at `include/optics/hnswlib/LICENSE` and is also available at
+<http://www.apache.org/licenses/LICENSE-2.0>. hnswlib is compiled into the library only
+when the optional `OPTICS_ENABLE_HNSW` backend is enabled (off by default); the default
+build does not include it.
 
 ---
 
