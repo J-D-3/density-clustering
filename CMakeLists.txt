@@ -5,6 +5,7 @@ project(OPTICS-Clustering VERSION 0.9.2 LANGUAGES CXX)
 # Optional Boost.Geometry rtree neighbor-search backend. OFF by default so the
 # library builds with no external dependencies (only the vendored nanoflann).
 option(OPTICS_ENABLE_BOOST_RTREE "Enable the optional Boost rtree backend" OFF)
+option(OPTICS_ENABLE_HNSW "Enable the optional hnswlib HNSW approximate backend" OFF)
 option(OPTICS_BUILD_TESTS "Build the OPTICS test suite" ${PROJECT_IS_TOP_LEVEL})
 option(OPTICS_BUILD_EXAMPLES "Build the example programs" ${PROJECT_IS_TOP_LEVEL})
 option(OPTICS_BUILD_PYTHON "Build the optional pybind11 Python binding" OFF)
@@ -34,6 +35,12 @@ if(OPTICS_ENABLE_BOOST_RTREE)
     # and the legacy FindBoost module, unlike the FindBoost-only Boost::boost.
     target_link_libraries(optics INTERFACE Boost::headers)
     target_compile_definitions(optics INTERFACE OPTICS_ENABLE_BOOST_RTREE)
+endif()
+
+if(OPTICS_ENABLE_HNSW)
+    # hnswlib is vendored header-only under include/optics/hnswlib/ (already on the include
+    # path), so there is no external package to find -- just flip on the gated backend.
+    target_compile_definitions(optics INTERFACE OPTICS_ENABLE_HNSW)
 endif()
 
 if(OPTICS_BUILD_TESTS)

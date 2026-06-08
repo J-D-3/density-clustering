@@ -1338,6 +1338,60 @@ TEST_CASE("RadiusSearchWithDists: same neighbors as radius_search, exact squared
 }
 
 
+#ifdef OPTICS_ENABLE_HNSW
+// Only built when the optional HNSW backend is enabled (-DOPTICS_ENABLE_HNSW=ON). HNSW is
+// APPROXIMATE, so this asserts high (not exact) recall vs nanoflann in high-D and that an
+// end-to-end OPTICS run over it recovers the same well-separated clusters (#47).
+TEST_CASE("HnswBackend: high-D approximate recall + usable OPTICS clustering (#47)") {
+	constexpr std::size_t Dim = 16;
+	const auto pts = optics::testdata::make_blobs<double, Dim>( 5, 200, 30.0, 1.0, 71u );
+	const std::size_t n = pts.size();
+
+	// Satisfies the NeighborSearch concept (+ the optional KnnCoreDist capability).
+	CHECK( ( optics::NeighborSearch<optics::HnswBackend<double, Dim>, double, Dim> ) );
+	CHECK( ( optics::KnnCoreDist<optics::HnswBackend<double, Dim>, double, Dim> ) );
+
+	const optics::NanoflannBackend<double, Dim> exact( pts );
+	const optics::HnswBackend<double, Dim> hnsw( pts, 32, 400 );  // higher M / ef => better recall
+
+	// Neighbor-set recall vs exact at a radius covering within-blob neighborhoods. Returned
+	// neighbors are within r (up to float rounding) -- the radius filter is exact-ish.
+	const double r = 6.0;
+	const double r_sq = r * r;
+	std::size_t total_true = 0, found = 0;
+	for ( std::size_t i = 0; i < n; i += 5 ) {
+		std::vector<std::size_t> ex, ap;
+		exact.radius_search( pts[i], r, ex );
+		hnsw.radius_search( pts[i], r, ap );
+		const std::set<std::size_t> aps( ap.begin(), ap.end() );
+		for ( const std::size_t t : ex ) { total_true++; if ( aps.count( t ) ) { found++; } }
+		for ( const std::size_t a : ap ) { CHECK( optics::detail::square_dist( pts[i], pts[a] ) <= r_sq * 1.02 + 1e-3 ); }
+	}
+	const double recall = total_true ? static_cast<double>( found ) / static_cast<double>( total_true ) : 1.0;
+	CHECK( recall > 0.85 );
+
+	// knn_core_dist agrees closely with the exact backend's (HNSW's native operation).
+	const auto cd_exact = exact.knn_core_dist( pts[0], 8, r );
+	const auto cd_hnsw = hnsw.knn_core_dist( pts[0], 8, r );
+	REQUIRE( cd_exact.has_value() );
+	REQUIRE( cd_hnsw.has_value() );
+	CHECK( *cd_hnsw == doctest::Approx( *cd_exact ).epsilon( 0.05 ) );
+
+	// End-to-end: OPTICS over the (default-parameter) HNSW backend recovers the same blobs.
+	const auto reach_exact = optics::compute_reachability_dists<double, Dim>( pts, 8, r );
+	const auto reach_hnsw =
+		optics::compute_reachability_dists<double, Dim, optics::HnswBackend<double, Dim>>( pts, 8, r );
+	check_ordering_invariants( reach_hnsw, n );
+	const double thr = 0.5 * r;
+	const auto le = labels_from_clusters( n, optics::get_cluster_indices( reach_exact, thr ) );
+	const auto lh = labels_from_clusters( n, optics::get_cluster_indices( reach_hnsw, thr ) );
+	CHECK( rand_index( le, lh ) > 0.9 );
+
+	std::cout << "HnswBackend tests successful! (recall=" << recall << ")" << std::endl;
+}
+#endif
+
+
 #ifdef OPTICS_ENABLE_BOOST_RTREE
 // Only built when the optional Boost backend is enabled. Verifies that the Boost
 // R*-tree backend is interchangeable with nanoflann (issue #27): identical

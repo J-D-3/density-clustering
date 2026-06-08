@@ -81,3 +81,10 @@ target_link_libraries(optics_reuse_probe PRIVATE optics::optics)
 # higher-D cloud (defines OPTICS_PROFILE internally). Release config; not a ctest.
 add_executable(optics_soptics_reuse_probe Benchmark/soptics_reuse_probe.cpp)
 target_link_libraries(optics_soptics_reuse_probe PRIVATE optics::optics)
+
+# HNSW recall-vs-speed probe (#47): HNSW vs exact / eps-approx nanoflann in high-D. Only
+# built with the optional HNSW backend enabled. Release config; not a ctest.
+if(OPTICS_ENABLE_HNSW)
+    add_executable(optics_hnsw_probe Benchmark/hnsw_probe.cpp)
+    target_link_libraries(optics_hnsw_probe PRIVATE optics::optics)
+endif()
