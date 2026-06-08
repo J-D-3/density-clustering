@@ -142,8 +142,28 @@ above 8 k (it is also ~O(n²) and would take many minutes).
 - **k-means is the only near-linear method** (92 ms at 100 k) and the only one that scales much
   further comfortably.
 - For large color clouds, use a **smaller ε** (tighter color clusters), **OnDemand** mode (lean
-  memory, avoids the O(n²) buffer, *and faster on dense clouds* — see below), or **downsample** —
-  not a different backend.
+  memory, avoids the O(n²) buffer, *and faster on dense clouds* — see below), **deduplicate**
+  (see next section — the biggest single win for images), or **downsample** — not a different backend.
+
+### Deduplication / unique-point OPTICS (`optics_dedup_probe`, #46)
+
+The dense-color O(n²) comes from flat regions where the *same* RGB triple repeats thousands of
+times — each repeat carries no new information yet pays full ordering cost. `deduplicate()` collapses
+identical pixels to unique points with integer weights; weight-aware OPTICS on the small unique cloud
+gives the **same** partition (lossless) and is now the default in `cluster_threshold` / `extract_xi`.
+
+Both images at `--max-dim 360`, `min_pts=25`, same ε on both paths, OnDemand, 1 thread:
+
+| image  | n (px) | unique | collapse | full ordering | dedup + weighted | **speedup** |
+|--------|--------|--------|----------|---------------|------------------|-------------|
+| parrot | 86 400 | 23 739 | 3.6×     | 18 148 ms     | 11 + 447 ms      | **≈ 40×**   |
+| hexal  | 50 400 |  8 876 | 5.7×     |  7 731 ms     |  5 + 318 ms      | **≈ 24×**   |
+
+The **speedup (24–40×) far exceeds the point-collapse (3.6–5.7×)**: dedup removes a flat region's
+whole O(region²) ordering term, not just its point count, so it attacks the quadratic directly. The
+deduplication pass itself is ~negligible (5–11 ms). On JPEGs (hexal) exact dedup is limited by
+DCT/gradient artifacts; `quantize(points, bin)` first (lossy) pushes the collapse ~3–4× further
+(≈33× at `bin=4`). Reproduce: `optics_dedup_probe parrot_rgb.csv hexal_rgb.csv 25`.
 
 ### Precompute vs OnDemand (`optics_mode_compare`)
 
