@@ -33,6 +33,17 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
   is randomized but **deterministic in `seed`**; on angular 3-D blobs it matched exact `hdbscan()`
   labelling (Rand ≈ 1.0) and recovered the planted partition (Rand ≈ 0.99). This is the "sHDBSCAN"
   combine-path the #52 plan anticipated; a dual-tree-Borůvka exact fast MST remains future work.
+- **Weighted / dedup HDBSCAN\* and sHDBSCAN** (#52 × #46): both `hdbscan()` and `shdbscan()` gained a
+  trailing `dedup = true` (auto-collapse bit-identical points to unique weighted points, cluster those,
+  expand labels back to the originals — the same partition, but the O(n²) MST shrinks to the unique
+  count) and an explicit `weights` argument (scikit-learn `sample_weight`: each point counts as
+  `weights[i]` originals for the core distance, cluster size and stability; non-empty `weights`
+  bypasses dedup). Threaded through the whole pipeline — weighted core distance
+  (`knn_core_dist_weighted` exact / cumulative-weight k-th approximate), weighted linkage/condense
+  sizes (so `min_cluster_size` is in weight units), and weighted stability. All-ones weights reproduce
+  the unweighted result bit-for-bit, and **weighted-on-dedup equals unweighted-on-full exactly
+  (Rand = 1.0)** for exact `hdbscan()` (≈ 0.91 for approximate `shdbscan()`); clouds with no duplicates
+  fall through unchanged. Needs a backend modeling `KnnCoreDistWeighted` (NanoflannBackend does).
 - **Structured (FHT spinner) projections for sOPTICS** (#58, opt-in): `SopticsProjection::Structured`
   replaces the Gaussian CEOs projection (`O(D·Dim)` per point) with random spinners
   `x → H D₃ H D₂ H D₁ x` (sign-flip + fast Walsh-Hadamard transform, `O(D·log Dim)`; new

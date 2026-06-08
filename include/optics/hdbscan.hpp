@@ -42,6 +42,7 @@
 // core-distance; scikit-learn-contrib/hdbscan excludes self, so add 1 there to match.
 
 #include "backend.hpp"
+#include "preprocess.hpp"               // deduplicate (auto-dedup / weighted path, issue #46)
 #include "detail/math.hpp"
 #include "detail/thread_pool.hpp"
 #include "detail/random_features.hpp"   // Metric / SopticsProjection enums + kernel embedding (sHDBSCAN)
@@ -110,16 +111,31 @@ struct CondensedEdge {
 // core_k(x) for every point: the distance to its min_samples-th nearest neighbour (self included),
 // computed in parallel via the backend's k-NN. A point with fewer than min_samples points in the
 // whole cloud gets core distance 0 (it cannot be a denser-than-noise centre anyway).
+//
+// Weighted (issue #46): when `weights` is non-empty each point stands for `weights[i]` identical
+// originals, and the core distance becomes the distance at which the cumulative neighbour weight
+// (nearest first, self included) reaches min_samples -- matching scikit-learn's `sample_weight`
+// (and reducing to the unweighted k-th distance when every weight is 1). Needs a backend modeling
+// KnnCoreDistWeighted; without it (and without weights) the plain k-NN path is used.
 template <class T, std::size_t Dim, class Backend>
 std::vector<double> hdbscan_core_distances( const std::vector<std::array<T, Dim>>& points,
-											 std::size_t min_samples, unsigned n_threads ) {
+											 std::size_t min_samples, unsigned n_threads,
+											 const std::vector<std::size_t>& weights = {} ) {
 	static_assert( KnnCoreDist<Backend, T, Dim>,
 		"hdbscan requires a backend modeling KnnCoreDist (e.g. NanoflannBackend)" );
 	const std::size_t n = points.size();
 	std::vector<double> core( n, 0.0 );
 	const Backend backend( points );
 	const T no_cap = std::numeric_limits<T>::max();  // no radius cap: a plain k-NN distance
+	const bool weighted = !weights.empty();
 	detail::parallel_for( n_threads, n, [&]( std::size_t i ) {
+		if ( weighted ) {
+			if constexpr ( KnnCoreDistWeighted<Backend, T, Dim> ) {
+				const auto cd = backend.knn_core_dist_weighted( points[i], weights, min_samples );
+				core[i] = cd.has_value() ? *cd : 0.0;
+				return;
+			}
+		}
 		const auto cd = backend.knn_core_dist( points[i], min_samples, no_cap );
 		core[i] = cd.has_value() ? *cd : 0.0;
 	} );
@@ -188,16 +204,39 @@ inline std::optional<double> kth_dist_from_sq( const std::vector<double>& sq, st
 	return std::sqrt( scratch[k - 1] );
 }
 
+// Weighted k-th distance: sort the (squared distance, weight) candidate pairs by distance and
+// return the distance at which the cumulative weight first reaches min_samples; nullopt if the
+// total weight stays below it. Reduces to kth_dist_from_sq when every weight is 1.
+inline std::optional<double> kth_weighted_dist_from_sq( const std::vector<double>& sq,
+														const std::vector<std::size_t>& neighbor_indices,
+														const std::vector<std::size_t>& weights, std::size_t min_samples ) {
+	std::vector<std::pair<double, std::size_t>> dw;
+	dw.reserve( sq.size() );
+	for ( std::size_t j = 0; j < sq.size(); ++j ) { dw.emplace_back( sq[j], weights[neighbor_indices[j]] ); }
+	std::sort( dw.begin(), dw.end(), []( const auto& a, const auto& b ) { return a.first < b.first; } );
+	std::size_t acc = 0;
+	for ( const auto& [s, w] : dw ) { acc += w; if ( acc >= min_samples ) { return std::sqrt( s ); } }
+	return std::nullopt;
+}
+
 // Approximate core distances from the CEOs candidate squared distances (parallel to the neighbor
 // lists). core_k(i) = the min_samples-th nearest among i's candidates. If a point has fewer than
 // min_samples candidates (the approximation found too few), fall back to its farthest candidate --
 // a conservative over-estimate that makes such a point connect late (and likely become noise).
+//
+// Weighted (issue #46): when `weights` is non-empty the k-th becomes the distance at which the
+// cumulative candidate weight reaches min_samples (`neighbors` supplies each candidate's point index
+// to look up its weight). Empty weights => the plain count-based k-th, unchanged.
 inline std::vector<double> approx_core_distances( const std::vector<std::vector<double>>& neighbor_sq,
-												  std::size_t min_samples ) {
+												  std::size_t min_samples,
+												  const std::vector<std::vector<std::size_t>>& neighbors = {},
+												  const std::vector<std::size_t>& weights = {} ) {
 	const std::size_t n = neighbor_sq.size();
+	const bool weighted = !weights.empty();
 	std::vector<double> core( n, 0.0 );
 	for ( std::size_t i = 0; i < n; ++i ) {
-		const auto cd = kth_dist_from_sq( neighbor_sq[i], min_samples );
+		const auto cd = weighted ? kth_weighted_dist_from_sq( neighbor_sq[i], neighbors[i], weights, min_samples )
+								 : kth_dist_from_sq( neighbor_sq[i], min_samples );
 		if ( cd.has_value() ) {
 			core[i] = *cd;
 		} else {
@@ -283,8 +322,14 @@ struct LinkageUnionFind {
 	std::vector<std::size_t> size;
 	std::size_t next_label;
 
-	explicit LinkageUnionFind( std::size_t N ) : parent( 2 * N - 1 ), size( 2 * N - 1, 1 ), next_label( N ) {
+	// `weights` (optional): each leaf 0..N-1 starts with its point weight instead of 1, so every
+	// node's `size` is the total ORIGINAL-point weight under it (issue #46). Empty => all-ones.
+	explicit LinkageUnionFind( std::size_t N, const std::vector<std::size_t>& weights = {} )
+			: parent( 2 * N - 1 ), size( 2 * N - 1, 1 ), next_label( N ) {
 		for ( std::size_t i = 0; i < parent.size(); ++i ) { parent[i] = i; }
+		if ( !weights.empty() ) {
+			for ( std::size_t i = 0; i < N; ++i ) { size[i] = weights[i]; }
+		}
 	}
 	std::size_t find( std::size_t x ) {
 		std::size_t root = x;
@@ -301,12 +346,14 @@ struct LinkageUnionFind {
 };
 
 // Sort the MST edges ascending and replay them through the union-find, producing the N-1 merge
-// rows of the single-linkage dendrogram. The final merge (node 2N-2) is the root.
-inline std::vector<LinkageRow> mst_to_linkage( std::vector<MstEdge> edges, std::size_t N ) {
+// rows of the single-linkage dendrogram. The final merge (node 2N-2) is the root. `weights`
+// (optional) makes each row's size a total point WEIGHT rather than a count (issue #46).
+inline std::vector<LinkageRow> mst_to_linkage( std::vector<MstEdge> edges, std::size_t N,
+											   const std::vector<std::size_t>& weights = {} ) {
 	std::vector<LinkageRow> rows;
 	if ( N < 2 ) { return rows; }
 	std::sort( edges.begin(), edges.end(), []( const MstEdge& a, const MstEdge& b ) { return a.weight < b.weight; } );
-	LinkageUnionFind uf( N );
+	LinkageUnionFind uf( N, weights );
 	rows.reserve( edges.size() );
 	for ( const auto& e : edges ) {
 		const std::size_t ra = uf.find( e.u );
@@ -320,9 +367,12 @@ inline std::vector<LinkageRow> mst_to_linkage( std::vector<MstEdge> edges, std::
 
 //=== Step 5: condense the cluster tree ======================================
 
-// Number of original points under a linkage node: 1 for a leaf (id < N), else the merge's size.
-inline std::size_t linkage_node_size( const std::vector<LinkageRow>& rows, std::size_t N, std::size_t node ) {
-	return node < N ? std::size_t( 1 ) : rows[node - N].size;
+// Total point WEIGHT under a linkage node: a leaf (id < N) weighs weights[node] (1 when unweighted),
+// an internal node carries the merge's accumulated size.
+inline std::size_t linkage_node_size( const std::vector<LinkageRow>& rows, std::size_t N, std::size_t node,
+									  const std::vector<std::size_t>& weights = {} ) {
+	if ( node < N ) { return weights.empty() ? std::size_t( 1 ) : weights[node]; }
+	return rows[node - N].size;
 }
 
 // Breadth-first list of all linkage-tree node ids in the subtree rooted at `root`.
@@ -349,7 +399,8 @@ inline std::vector<std::size_t> bfs_linkage( const std::vector<LinkageRow>& rows
 // at this density level) rather than spawning a real cluster. New cluster ids start at N (the root
 // is N) and increase as we descend. lambda_val = 1/dist is the density level of the event.
 inline std::vector<CondensedEdge> condense_tree( const std::vector<LinkageRow>& rows, std::size_t N,
-												 std::size_t min_cluster_size ) {
+												 std::size_t min_cluster_size,
+												 const std::vector<std::size_t>& weights = {} ) {
 	std::vector<CondensedEdge> result;
 	if ( N == 0 ) { return result; }
 	if ( N == 1 ) { return result; }  // a single point: no hierarchy, handled as noise upstream
@@ -363,6 +414,8 @@ inline std::vector<CondensedEdge> condense_tree( const std::vector<LinkageRow>& 
 	const auto lambda_of = []( double dist ) -> double {
 		return dist > 0.0 ? 1.0 / dist : std::numeric_limits<double>::infinity();
 	};
+	// Weight a single point falls out with: its sample weight (issue #46), or 1 unweighted.
+	const auto point_weight = [&]( std::size_t p ) -> std::size_t { return weights.empty() ? std::size_t( 1 ) : weights[p]; };
 
 	for ( const std::size_t node : bfs_linkage( rows, N, root ) ) {
 		if ( ignore[node] || node < N ) { continue; }
@@ -370,8 +423,8 @@ inline std::vector<CondensedEdge> condense_tree( const std::vector<LinkageRow>& 
 		const std::size_t left = row.left;
 		const std::size_t right = row.right;
 		const double lambda_value = lambda_of( row.dist );
-		const std::size_t left_count = linkage_node_size( rows, N, left );
-		const std::size_t right_count = linkage_node_size( rows, N, right );
+		const std::size_t left_count = linkage_node_size( rows, N, left, weights );
+		const std::size_t right_count = linkage_node_size( rows, N, right, weights );
 
 		if ( left_count >= min_cluster_size && right_count >= min_cluster_size ) {
 			// Genuine split: both sides become new clusters.
@@ -382,25 +435,25 @@ inline std::vector<CondensedEdge> condense_tree( const std::vector<LinkageRow>& 
 		} else if ( left_count < min_cluster_size && right_count < min_cluster_size ) {
 			// Both sides too small: every point falls out of the current cluster here.
 			for ( const std::size_t sub : bfs_linkage( rows, N, left ) ) {
-				if ( sub < N ) { result.push_back( { relabel[node], sub, lambda_value, 1 } ); }
+				if ( sub < N ) { result.push_back( { relabel[node], sub, lambda_value, point_weight( sub ) } ); }
 				ignore[sub] = 1;
 			}
 			for ( const std::size_t sub : bfs_linkage( rows, N, right ) ) {
-				if ( sub < N ) { result.push_back( { relabel[node], sub, lambda_value, 1 } ); }
+				if ( sub < N ) { result.push_back( { relabel[node], sub, lambda_value, point_weight( sub ) } ); }
 				ignore[sub] = 1;
 			}
 		} else if ( left_count < min_cluster_size ) {
 			// Left too small falls out; right continues as the SAME cluster.
 			relabel[right] = relabel[node];
 			for ( const std::size_t sub : bfs_linkage( rows, N, left ) ) {
-				if ( sub < N ) { result.push_back( { relabel[node], sub, lambda_value, 1 } ); }
+				if ( sub < N ) { result.push_back( { relabel[node], sub, lambda_value, point_weight( sub ) } ); }
 				ignore[sub] = 1;
 			}
 		} else {
 			// Right too small falls out; left continues as the SAME cluster.
 			relabel[left] = relabel[node];
 			for ( const std::size_t sub : bfs_linkage( rows, N, right ) ) {
-				if ( sub < N ) { result.push_back( { relabel[node], sub, lambda_value, 1 } ); }
+				if ( sub < N ) { result.push_back( { relabel[node], sub, lambda_value, point_weight( sub ) } ); }
 				ignore[sub] = 1;
 			}
 		}
@@ -600,12 +653,13 @@ inline void do_labelling( const std::vector<CondensedEdge>& tree, const std::vec
 // condense -> stability -> EOM/leaf selection -> labels + probabilities. This is the part that
 // does NOT care how the MST was built, so it is shared by exact hdbscan() (dense Prim) and the
 // approximate shdbscan() (CEOs sparse graph). The caller has already noise-handled n < min_cluster_size.
+// `weights` (optional) makes cluster sizes / stabilities count original-point weight (issue #46).
 inline HdbscanResult extract_from_mst( const std::vector<MstEdge>& mst, std::size_t n,
 									   std::size_t min_cluster_size, ClusterSelectionMethod method,
-									   bool allow_single_cluster ) {
+									   bool allow_single_cluster, const std::vector<std::size_t>& weights = {} ) {
 	HdbscanResult result;
-	const auto linkage = mst_to_linkage( mst, n );
-	const auto condensed = condense_tree( linkage, n, min_cluster_size );
+	const auto linkage = mst_to_linkage( mst, n, weights );
+	const auto condensed = condense_tree( linkage, n, min_cluster_size, weights );
 	const auto stability = compute_stabilities( condensed, n );
 	const auto selected = ( method == ClusterSelectionMethod::Leaf )
 		? select_leaf( condensed, stability, n, allow_single_cluster )
@@ -634,6 +688,17 @@ inline HdbscanResult extract_from_mst( const std::vector<MstEdge>& mst, std::siz
 //                           so HDBSCAN* does not collapse everything into a single trivial cluster.
 //   n_threads             : worker threads for the core-distance phase (0 => hardware concurrency).
 //                           The MST and extraction are sequential.
+//   dedup                 : (issue #46, ON by default) collapse bit-identical points to unique
+//                           weighted points, cluster those, and expand the labels back to the
+//                           ORIGINAL points -- the same partition, but the O(n^2) MST shrinks to the
+//                           unique-point count (the big win for color/quantized data). Clouds with no
+//                           duplicates fall through to the plain path, byte-for-byte unchanged. Set
+//                           false to force the full cloud.
+//   weights               : (issue #46) explicit per-point sample weights (sklearn `sample_weight`):
+//                           each point counts as weights[i] originals for the core distance, cluster
+//                           size and stability. Non-empty `weights` runs that weighting directly and
+//                           BYPASSES dedup; empty (default) leaves dedup in charge. Requires a backend
+//                           modeling KnnCoreDistWeighted.
 //
 // Complexity: the dense-Prim MST is O(n^2) time / O(n) memory -- exact and simple, suited to
 // small/medium n. A sub-quadratic MST (Boruvka, or the sOPTICS graph) is future work (issue #52
@@ -641,7 +706,8 @@ inline HdbscanResult extract_from_mst( const std::vector<MstEdge>& mst, std::siz
 template <class T, std::size_t Dim, class Backend = NanoflannBackend<T, Dim>>
 HdbscanResult hdbscan( const std::vector<std::array<T, Dim>>& points, std::size_t min_cluster_size,
 					   std::size_t min_samples = 0, ClusterSelectionMethod method = ClusterSelectionMethod::EOM,
-					   bool allow_single_cluster = false, unsigned n_threads = 0 ) {
+					   bool allow_single_cluster = false, unsigned n_threads = 0, bool dedup = true,
+					   const std::vector<std::size_t>& weights = {} ) {
 	static_assert( std::is_floating_point_v<T>, "hdbscan: coordinate type 'T' must be float or double" );
 	static_assert( Dim >= 1, "hdbscan: dimension must be >= 1" );
 	static_assert( NeighborSearch<Backend, T, Dim>, "Backend does not satisfy the NeighborSearch concept" );
@@ -657,6 +723,39 @@ HdbscanResult hdbscan( const std::vector<std::array<T, Dim>>& points, std::size_
 	result.probabilities.assign( n, 0.0 );
 	// Too few points to form even one cluster: everything is noise.
 	if ( n < min_cluster_size ) { return result; }
+
+	// Explicit sample weights: weighted run on the points as given (labels parallel to the input).
+	if ( !weights.empty() ) {
+		if ( weights.size() != n ) { throw std::invalid_argument( "hdbscan: weights.size() must equal points.size()" ); }
+		if constexpr ( KnnCoreDistWeighted<Backend, T, Dim> ) {
+			const auto core = detail::hdbscan_core_distances<T, Dim, Backend>( points, min_samples, n_threads, weights );
+			const auto mst = detail::mutual_reachability_mst( points, core );
+			return detail::extract_from_mst( mst, n, min_cluster_size, method, allow_single_cluster, weights );
+		} else {
+			throw std::invalid_argument( "hdbscan: explicit weights require a backend modeling KnnCoreDistWeighted" );
+		}
+	}
+
+	// Auto-dedup: collapse bit-identical points, cluster the unique weighted cloud, expand to original.
+	if constexpr ( KnnCoreDistWeighted<Backend, T, Dim> ) {
+		if ( dedup ) {
+			const auto d = deduplicate( points );
+			if ( d.unique_points.size() < n ) {  // actual collapse => weighted path
+				const std::size_t nu = d.unique_points.size();
+				const auto core = detail::hdbscan_core_distances<T, Dim, Backend>( d.unique_points, min_samples, n_threads, d.weights );
+				const auto mst = detail::mutual_reachability_mst( d.unique_points, core );
+				const auto ur = detail::extract_from_mst( mst, nu, min_cluster_size, method, allow_single_cluster, d.weights );
+				for ( std::size_t o = 0; o < n; ++o ) {
+					const std::size_t u = d.unique_of_original[o];
+					result.labels[o] = ur.labels[u];
+					result.probabilities[o] = ur.probabilities[u];
+				}
+				result.n_clusters = ur.n_clusters;
+				return result;
+			}
+			// no duplicates: nothing to gain; fall through to the plain (byte-identical) path.
+		}
+	}
 
 	const auto core = detail::hdbscan_core_distances<T, Dim, Backend>( points, min_samples, n_threads );
 	const auto mst = detail::mutual_reachability_mst( points, core );
@@ -686,6 +785,14 @@ HdbscanResult hdbscan( const std::vector<std::array<T, Dim>>& points, std::size_
 //   n_projections, k, m, seed : CEOs tunables (see compute_soptics_reachability_dists).
 //   n_threads     : workers for the projection / candidate phases.
 //   metric, kernel_scale, projection : as in compute_soptics_reachability_dists.
+//   dedup         : (issue #46, ON by default) collapse bit-identical points to unique weighted
+//                   points, cluster those, expand labels back to the originals. Exact dedup is
+//                   lossless in any metric (identical coords are identical everywhere); for the
+//                   cosine regime, merging by DIRECTION (scalar multiples) is an opt-in -- pass your
+//                   own `weights` from deduplicate_cosine for that.
+//   weights       : (issue #46) explicit per-point sample weights; non-empty BYPASSES dedup and runs
+//                   the weighting directly (the approximate core distance and cluster sizes become
+//                   weight-aware). Empty (default) leaves dedup in charge.
 template <class T, std::size_t Dim>
 HdbscanResult shdbscan( const std::vector<std::array<T, Dim>>& points, std::size_t min_cluster_size,
 						std::size_t min_samples = 0, double epsilon = -1.0,
@@ -693,7 +800,8 @@ HdbscanResult shdbscan( const std::vector<std::array<T, Dim>>& points, std::size
 						unsigned seed = 42, unsigned n_threads = 0,
 						ClusterSelectionMethod method = ClusterSelectionMethod::EOM,
 						bool allow_single_cluster = false, Metric metric = Metric::Cosine,
-						double kernel_scale = 0.0, SopticsProjection projection = SopticsProjection::Gaussian ) {
+						double kernel_scale = 0.0, SopticsProjection projection = SopticsProjection::Gaussian,
+						bool dedup = true, const std::vector<std::size_t>& weights = {} ) {
 	static_assert( std::is_floating_point_v<T>, "shdbscan: coordinate type 'T' must be float or double" );
 	static_assert( Dim >= 1, "shdbscan: dimension must be >= 1" );
 
@@ -706,14 +814,38 @@ HdbscanResult shdbscan( const std::vector<std::array<T, Dim>>& points, std::size
 	result.probabilities.assign( n, 0.0 );
 	if ( n < min_cluster_size ) { return result; }
 
+	const bool explicit_weights = !weights.empty();
+	if ( explicit_weights && weights.size() != n ) {
+		throw std::invalid_argument( "shdbscan: weights.size() must equal points.size()" );
+	}
+
+	// Auto-dedup on the ORIGINAL points (before any embedding/normalization), then recurse weighted
+	// and expand. Only when the caller did not pass explicit weights.
+	if ( !explicit_weights && dedup ) {
+		const auto d = deduplicate( points );
+		if ( d.unique_points.size() < n ) {
+			const auto ur = shdbscan<T, Dim>( d.unique_points, min_cluster_size, min_samples, epsilon,
+											  n_projections, k, m, seed, n_threads, method, allow_single_cluster,
+											  metric, kernel_scale, projection, false, d.weights );
+			for ( std::size_t o = 0; o < n; ++o ) {
+				const std::size_t u = d.unique_of_original[o];
+				result.labels[o] = ur.labels[u];
+				result.probabilities[o] = ur.probabilities[u];
+			}
+			result.n_clusters = ur.n_clusters;
+			return result;
+		}
+	}
+
 	// Non-cosine metric: embed into random Fourier features (cosine-on-features ~ target kernel),
-	// then recurse on the cosine pipeline. Indices line up 1:1, so labels map straight back.
+	// then recurse on the cosine pipeline (carrying weights). Indices line up 1:1, labels map back.
 	if ( metric != Metric::Cosine ) {
 		constexpr std::size_t FeatDim = 256;
 		const double sigma = ( kernel_scale > 0.0 ) ? kernel_scale : detail::auto_kernel_scale( points, metric );
 		const auto feats = detail::embed_random_features<FeatDim, T, Dim>( points, metric, sigma, seed, n_threads );
 		return shdbscan<double, FeatDim>( feats, min_cluster_size, min_samples, epsilon, n_projections, k, m,
-										  seed, n_threads, method, allow_single_cluster, Metric::Cosine, 0.0, projection );
+										  seed, n_threads, method, allow_single_cluster, Metric::Cosine, 0.0,
+										  projection, false, weights );
 	}
 
 	// L2-normalize onto the unit sphere (cosine metric); the origin has no direction, leave it.
@@ -744,9 +876,11 @@ HdbscanResult shdbscan( const std::vector<std::array<T, Dim>>& points, std::size
 	std::vector<std::vector<double>> neighbor_sq;
 	const auto neighbors = detail::ceos_neighbors( unit, eps, min_samples, params, &neighbor_sq );
 
-	const auto core = detail::approx_core_distances( neighbor_sq, min_samples );
+	const auto core = explicit_weights
+		? detail::approx_core_distances( neighbor_sq, min_samples, neighbors, weights )
+		: detail::approx_core_distances( neighbor_sq, min_samples );
 	const auto mst = detail::approx_mutual_reachability_mst( neighbors, neighbor_sq, core, n );
-	return detail::extract_from_mst( mst, n, min_cluster_size, method, allow_single_cluster );
+	return detail::extract_from_mst( mst, n, min_cluster_size, method, allow_single_cluster, weights );
 }
 
 }  // namespace optics
