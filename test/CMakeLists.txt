@@ -82,6 +82,12 @@ target_link_libraries(optics_quality_compare PRIVATE optics::optics)
 add_executable(hdbscan_compare Benchmark/hdbscan_compare.cpp)
 target_link_libraries(hdbscan_compare PRIVATE optics::optics)
 
+# Per-cell executor for the 1.0.0 benchmark matrix (#59): runs one algorithm
+# (optics|soptics|hdbscan|shdbscan) on a CSV cloud over the full dimensionality spine and emits
+# labels + a RESULT line for tools/run_matrix.py. Release config; not a ctest.
+add_executable(optics_matrix Benchmark/optics_matrix.cpp)
+target_link_libraries(optics_matrix PRIVATE optics::optics)
+
 # #55 distance-reuse probe: per-phase timing of the reuse fast path vs a recompute-only
 # backend on a dense cloud (defines OPTICS_PROFILE internally). Release config; not a ctest.
 add_executable(optics_reuse_probe Benchmark/reuse_probe.cpp)
