@@ -1,58 +1,100 @@
-# optics_py — Python binding
+# optics — Python package
 
-An optional [pybind11](https://pybind11.readthedocs.io/) binding exposing OPTICS for
-**1/2/3/4-D** NumPy point clouds. It is **off by default** and is the only part of the
-project with a Python build dependency — the C++ library stays dependency-free.
+OPTICS / HDBSCAN\* density clustering for **color spaces** and N-D point clouds, with a
+high-level, **OpenCV-friendly image color API**. Built on the header-only C++ library via a
+[pybind11](https://pybind11.readthedocs.io/) extension; the C++ library itself stays
+dependency-free.
 
-## Build
+The defaults encode what the color-clustering study (`study/color_clustering/REPORT.md`) found
+works best on real images: **HDBSCAN\* in CIELAB, voxel-quantized, L2 metric, dedup always on.**
+
+## Install
 
 ```sh
-pip install pybind11 numpy
-cmake -S . -B build-py -DOPTICS_BUILD_PYTHON=ON \
-      -DOPTICS_BUILD_TESTS=OFF -DOPTICS_BUILD_EXAMPLES=OFF \
-      -Dpybind11_DIR=$(python -m pybind11 --cmakedir)
-cmake --build build-py --config Release
+pip install ./python            # from the repo root (scikit-build-core builds the C++ extension)
 ```
 
-This produces `optics_py.*.pyd` / `.so` under `build-py/python/` (a `Release/`
-subdirectory on MSVC). Put that directory on `sys.path` or `PYTHONPATH` to import it.
+Needs a C++20 compiler + CMake ≥ 3.21 (the build pulls `scikit-build-core` and `pybind11`
+itself). Runtime dependency: `numpy`. OpenCV is **not** required — images are plain NumPy arrays;
+`pip install ./python[opencv]` only if you want `cv2` in your own pipeline.
 
-## Use
+## Quickstart — cluster an image's colors (OpenCV)
 
 ```python
-import numpy as np, optics_py
-pts = np.random.default_rng(0).normal(size=(1000, 2))   # (N, Dim), Dim in 1..4
+import cv2, optics
 
-# Flat reachability-threshold cut -> per-point labels (-1 = noise).
-# (The paper's ExtractDBSCAN, not a DBSCAN run. Omit threshold for an educated
-#  default; cluster_dbscan is a deprecated alias of cluster_threshold.)
-labels = optics_py.cluster_threshold(pts, min_pts=10, threshold=2.0)
+bgr = cv2.imread("box.png")                 # HxWx3 uint8, BGR (OpenCV's order)
+res = optics.cluster_image(bgr)             # defaults: hdbscan, Lab, voxel auto, L2
 
-# Hierarchical xi extraction -> per-point labels (same format as above)
-labels_xi = optics_py.extract_xi(pts, min_pts=10, chi=0.05)
+print(res.n_clusters, "colors;", f"{res.noise_fraction:.0%} noise")
+for c in res.palette:                       # dominant colors, largest first
+    print(f"  {c.size:6d} px  rgb={c.rgb}")
 
-# Raw ordering: point_index + reachability arrays (in cluster order; -1 = UNDEFINED)
-order = optics_py.compute_reachability(pts, min_pts=10)
-
-# HDBSCAN* -> a separate density clusterer, no epsilon/threshold: just min_cluster_size
-# (+ optional min_samples). Returns a dict: 'labels' (-1 = noise), 'probabilities' ([0,1]
-# membership strength), 'n_clusters'. method = 'eom' (default) or 'leaf'.
-res = optics_py.hdbscan(pts, min_cluster_size=15)
-labels_h, probs, k = res["labels"], res["probabilities"], res["n_clusters"]
-
-# sHDBSCAN -> scalable, approximate HDBSCAN* (CEOs random projections). Same dict shape
-# as hdbscan, deterministic in 'seed'. Cosine metric by default (brightness-invariant);
-# 'l2'/'l1' recover Euclidean/Manhattan structure.
-res_s = optics_py.shdbscan(pts, min_cluster_size=15, metric="l2", seed=42)
-
-# sOPTICS -> scalable, approximate OPTICS. Returns per-point labels (-1 = noise) via a
-# flat cut (extract='threshold') or the hierarchical Xi method (extract='xi').
-labels_so = optics_py.soptics(pts, min_pts=10, extract="xi", chi=0.05, metric="l2")
+labels = res.labels                         # HxW int array, -1 = noise
+cv2.imwrite("segmented.png", res.recolored()[..., ::-1])   # mean-color image, RGB->BGR for cv2
 ```
 
-`hdbscan`/`shdbscan` deduplicate bit-identical points by default — the big win on
-flat-color/quantized data. The approximate variants (`shdbscan`/`soptics`) are randomized
-but **deterministic in `seed`**. The binding now covers OPTICS, HDBSCAN\*, sHDBSCAN, and
-sOPTICS.
+`cluster_image` accepts an `HxWx3` image (uint8 or float, **BGR by default** — pass `bgr=False`
+for RGB) or any `(N, 3)` color cloud. It returns an `ImageClustering` with `.labels`,
+`.palette` (list of `Cluster(id, size, fraction, rgb, lab)`), `.n_clusters`, `.noise_fraction`,
+and `.recolored(background=(0,0,0))`.
 
-Smoke test: `python python/test_optics_py.py build-py/python/Release`.
+### Recommended defaults (from the study)
+
+| knob | default | why |
+|---|---|---|
+| `algo` | `"hdbscan"` | best color recall, no `epsilon`/`threshold` to tune |
+| `space` | `"lab"` | perceptual — separates orange/red, brown/red that RGB muddles |
+| `voxel` | `"auto"` (4 in RGB units / 2 in Lab) | ~12× fewer points, ~10× faster, recall preserved; ≥ 8 over-merges |
+| `metric` | `"l2"` | for the approximate algos; `"cosine"` clusters by hue and merges black/white/gray |
+| dedup | always on (in the library) | lossless; the big speedup on flat-color images |
+
+> **Don't gray-world / white-balance before clustering.** The study found it shifts vivid colors
+> toward neutral gray/brown and destroys the color identity you are trying to recover.
+
+### Tuning
+
+```python
+optics.cluster_image(bgr, algo="optics-xi")          # label every pixel (hdbscan leaves noise)
+optics.cluster_image(bgr, space="rgb", voxel=4)       # cluster in RGB instead of Lab
+optics.cluster_image(bgr, min_cluster_size=200)       # require larger color regions
+optics.cluster_image(bgr, max_dim=512)                # downscale big images first (speed)
+optics.cluster_image(bgr, algo="shdbscan")            # approximate; only worth it at >~1e5 colors
+```
+
+`algo` ∈ `{"hdbscan", "optics-xi", "optics-threshold", "shdbscan", "soptics"}`. HDBSCAN\* finds the
+color *modes* but labels much of the image as noise (−1); the OPTICS extractors label almost every
+pixel but at lower color purity. The approximate variants (`shdbscan`/`soptics`) are for very large
+clouds — below ~10⁵ unique colors, exact `hdbscan` is both more accurate **and** faster.
+
+## Low-level API
+
+The native functions operate on a raw `(N, Dim)` cloud (`Dim` ∈ 1..4) and are re-exported on the
+package: `optics.hdbscan`, `optics.shdbscan`, `optics.cluster_threshold`, `optics.extract_xi`,
+`optics.soptics`, `optics.compute_reachability`, and `optics.quantize`. Every clusterer takes an
+optional `voxel` (grid size; 0 = off). For color work pass Lab coordinates and `metric="l2"`.
+
+```python
+import numpy as np, optics
+pts = np.random.default_rng(0).normal(size=(1000, 3)) * 30
+res = optics.hdbscan(pts, min_cluster_size=15, voxel=4.0)   # dict: labels, probabilities, n_clusters
+lab = optics.srgb_to_lab(rgb_u8)                            # color-space helpers also exported
+```
+
+## Build in-tree (no pip)
+
+For development you can build just the extension from the top-level CMake:
+
+```sh
+cmake --preset msvc -DOPTICS_BUILD_PYTHON=ON \
+      -Dpybind11_DIR=$(python -m pybind11 --cmakedir)
+cmake --build --preset msvc --target _optics
+python python/tests/test_native.py build/python/Release   # pass the dir holding the built _optics
+```
+
+## Tests
+
+```sh
+python python/tests/test_native.py     # low-level binding (after pip install)
+python python/tests/test_color.py      # high-level cluster_image
+```
