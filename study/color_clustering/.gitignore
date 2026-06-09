@@ -1,0 +1,6 @@
+# Per-run working files (coordinate CSVs, per-pixel labels, reachability dumps).
+# These are large and regenerable from the images; keep only results.csv/runs.json/plots.
+out/work/
+out/*.csv
+!out/results.csv
+!out/voxel.csv
