@@ -1,0 +1,8 @@
+# scikit-build-core / pip build artifacts and caches
+build/
+build_test/
+dist/
+*.egg-info/
+__pycache__/
+*.pyd
+*.so

@@ -1,0 +1,30 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "pybind11>=2.12"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "optics-clustering"
+version = "0.9.1"
+description = "OPTICS / HDBSCAN* density clustering for color spaces and N-D point clouds, with an OpenCV-friendly image color API."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Ingo Proff" }]
+keywords = ["clustering", "OPTICS", "HDBSCAN", "color", "opencv", "image-segmentation"]
+dependencies = ["numpy>=1.21"]
+
+[project.optional-dependencies]
+# OpenCV is NOT required (images are plain NumPy arrays); install this extra only if you want
+# cv2.imread/cvtColor in your own pipeline. The package itself never imports cv2.
+opencv = ["opencv-python>=4.5"]
+test = ["pytest>=7"]
+
+[project.urls]
+Homepage = "https://github.com/J-D-3/OPTICS-Clustering"
+
+[tool.scikit-build]
+minimum-version = "0.10"
+# The pure-Python package; the native `_optics` extension is installed into it by CMake.
+wheel.packages = ["optics"]
+cmake.version = ">=3.21"
+build-dir = "build/{wheel_tag}"
