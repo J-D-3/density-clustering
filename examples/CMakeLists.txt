@@ -4,6 +4,11 @@
 add_executable(optics_color color_clustering/optics_color.cpp)
 target_link_libraries(optics_color PRIVATE optics::optics)
 
+# Multi-algorithm, machine-readable color-clustering harness for the image study
+# (study/color_clustering/). Generalizes optics_color across OPTICS/Xi/HDBSCAN/sHDBSCAN/sOPTICS.
+add_executable(color_study color_clustering/color_study.cpp)
+target_link_libraries(color_study PRIVATE optics::optics)
+
 # Generic "cluster your own CSV" example (any of dim 2/3/4/16). Pairs with
 # tools/datasets.py (synthetic 2-D sets) and tools/visualize.py (plots).
 add_executable(cluster_csv cluster_csv/cluster_csv.cpp)
