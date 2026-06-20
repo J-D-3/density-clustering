@@ -37,7 +37,10 @@ def main(argv=None):
     from sklearn.cluster import OPTICS, DBSCAN, KMeans, HDBSCAN
 
     X = np.loadtxt(args.coords, delimiter=",", skiprows=1)
-    X = np.atleast_2d(X)
+    # A 1-D coords file (d=1) loads as shape (n,); it must become (n, 1) -- n samples, 1 feature.
+    # np.atleast_2d would wrongly make it (1, n) (one sample, n features), so reshape explicitly.
+    if X.ndim == 1:
+        X = X.reshape(-1, 1)
 
     # Warm up sklearn's one-time lazy init (BLAS / threadpoolctl / first-call imports) on a tiny
     # array OUTSIDE the timed region, so the measured fit reflects steady state -- otherwise this
