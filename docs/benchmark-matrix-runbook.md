@@ -82,7 +82,11 @@ python tools/run_matrix.py --tier dim --out results/matrix.csv --reps 3 --budget
 python tools/run_matrix.py --tier pilot --engines ours-soptics ours-shdbscan \
        --reps 5 --out results/matrix.csv --refresh
 
-# 5) analyze -> D1-D5 decision tables, speedup-vs-sklearn, quality table (Markdown report)
+# 5) Tier C -- the D1/D3/D4 sweep axes (backend x mode x eps), exact OPTICS only. Expands each
+#    cell into config variants; resolves the three decisions the timing spines hold fixed.
+python tools/run_matrix.py --tier axes --out results/matrix.csv --reps 3 --budget-s 300 --resume
+
+# 6) analyze -> D1-D5 decision tables, speedup-vs-sklearn, quality table (Markdown report)
 python tools/analyze_matrix.py results/matrix.csv --out results/report.md
 ```
 
@@ -110,20 +114,25 @@ default pass; it is checkpointed, so it can span sessions.
 
 ---
 
-## 5. What the study currently resolves (and what needs more axes)
+## 5. What the study resolves
 
-The shipped tiers resolve the **crossover and headline** decisions and the quality baseline:
+The timing spines (steps 1-4) resolve the **crossover and headline** decisions and the quality
+baseline; the **axes** tier (step 5) resolves the three decisions the spines hold fixed:
 
 - **D2 (sOPTICS vs OPTICS)** and **D5 (HDBSCAN\* vs sHDBSCAN)** — the `n`-spine gives the crossover.
 - **Speedup vs scikit-learn OPTICS** and **ours-HDBSCAN vs scikit-learn-HDBSCAN parity** — every cell.
 - **Quality** (ARI/NMI/Rand vs ground truth) across `d`, density, and shape.
+- **D1 (backend by dim)**, **D3 (Precompute vs OnDemand)**, **D4 (uniform vs knee ε)** — the `axes`
+  tier sweeps the backend / mode / eps variants of exact OPTICS; `analyze_matrix.py` emits a D1/D3/D4
+  table with a data-driven verdict for each, and `readiness` flags them RESOLVED once the axes data is
+  present (otherwise it prints which axis is still missing).
 
-`analyze_matrix.py` is **honest about what it can't yet decide**: **D1** (backend by dimensionality)
-needs the backend axis (exact / eps-approx / Boost / HNSW), **D3** (Precompute vs OnDemand) needs the
-mode axis, **D4** (uniform vs knee ε) needs the eps axis. `optics_matrix` already accepts `--eps` and
-`--mode`; wiring those as sweep axes in `run_matrix.py` (a new tier or a config dimension) is the
-documented next step before D1/D3/D4 can be closed. The analysis prints exactly which axis each
-unresolved decision is waiting on.
+A reference pass on the dev box (Core Ultra 7 155H, 4 threads, 2026-06-20) found: **D1** exact
+nanoflann stays the default — eps-approx peaks at ~1.5× around d=8-16 with no ARI loss but the gain
+vanishes by d≥32, and HNSW is index-build-bound at this n; **D3** Precompute is faster wherever its
+cache fits, so OnDemand is kept only as the memory-safe default for large-n dense clouds; **D4** knee
+is kept (wins quality where cluster scale varies, never slower). See a generated `results/report.md`
+for the tables behind these.
 
 ---
 
