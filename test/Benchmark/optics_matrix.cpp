@@ -17,8 +17,12 @@
 //   optics_matrix --coords <csv> --algo optics|soptics|hdbscan|shdbscan --out-labels <csv>
 //     [--min-pts 16] [--min-cluster-size 16] [--chi 0.05] [--eps knee|uniform|<num>]
 //     [--metric cosine|l2|l1|euclidean] [--mode ondemand|precompute]
+//     [--backend exact|approx100|approx500|approx1000|hnsw]
 //     [--projection gaussian|structured] [--threads 4] [--seed 42]
-//   For optics, --eps/--mode apply. For soptics/shdbscan, --metric/--projection/--seed apply and
+//   For optics, --eps/--mode/--backend apply (the D4/D3/D1 sweep axes). 'hnsw' needs the binary
+//   built with -DOPTICS_ENABLE_HNSW=ON; eps is always computed with the exact backend so every
+//   backend searches the same radius (D1 measures search performance + recall, not a new radius).
+//   For soptics/shdbscan, --metric/--projection/--seed apply and
 //   eps auto-scales (the #58 data-scaled default). For hdbscan/shdbscan, --min-cluster-size and
 //   --min-pts (as min_samples; 0 => min_cluster_size) apply.
 
@@ -26,6 +30,9 @@
 #include <optics/hdbscan.hpp>
 #include <optics/io.hpp>
 #include <optics/Stopwatch.hpp>
+#ifdef OPTICS_ENABLE_HNSW
+#include <optics/hnsw_backend.hpp>  // D1 backend axis: approximate HNSW (gated by the CMake option)
+#endif
 
 #include "bench_config.hpp"
 #include "csv_points.hpp"
@@ -105,8 +112,33 @@ int run( const Args& a, const std::vector<double>& flat, std::size_t n ) {
             const auto mode = ( a.get( "--mode", "ondemand" ) == "precompute" )
                                   ? optics::NeighborMode::Precompute
                                   : optics::NeighborMode::OnDemand;
+            // D1 backend axis. eps_used (computed above with the exact backend) is passed to every
+            // backend, so the comparison is pure search performance + recall, not a different radius.
+            const std::string be = a.get( "--backend", "exact" );
             sw::Stopwatch w;
-            reach = optics::compute_reachability_dists<double, Dim>( pts, min_pts, eps_used, mode, threads );
+            if ( be == "exact" ) {
+                reach = optics::compute_reachability_dists<double, Dim>( pts, min_pts, eps_used, mode, threads );
+            } else if ( be == "approx100" ) {
+                reach = optics::compute_reachability_dists<double, Dim, optics::ApproxNanoflannBackend<double, Dim, 100>>(
+                    pts, min_pts, eps_used, mode, threads );
+            } else if ( be == "approx500" ) {
+                reach = optics::compute_reachability_dists<double, Dim, optics::ApproxNanoflannBackend<double, Dim, 500>>(
+                    pts, min_pts, eps_used, mode, threads );
+            } else if ( be == "approx1000" ) {
+                reach = optics::compute_reachability_dists<double, Dim, optics::ApproxNanoflannBackend<double, Dim, 1000>>(
+                    pts, min_pts, eps_used, mode, threads );
+            } else if ( be == "hnsw" ) {
+#ifdef OPTICS_ENABLE_HNSW
+                reach = optics::compute_reachability_dists<double, Dim, optics::HnswBackend<double, Dim>>(
+                    pts, min_pts, eps_used, mode, threads );
+#else
+                std::cerr << "backend 'hnsw' not built (configure -DOPTICS_ENABLE_HNSW=ON)\n";
+                return 3;
+#endif
+            } else {
+                std::cerr << "unknown --backend " << be << " (exact|approx100|approx500|approx1000|hnsw)\n";
+                return 2;
+            }
             ordering_ms = static_cast<long long>( bench::ceil_ms_from_us( w.elapsed<sw::mus>() ) );
         } else {  // soptics: eps auto-scales (#58); metric / projection apply.
             const auto metric = parse_metric( a.get( "--metric", "cosine" ) );
