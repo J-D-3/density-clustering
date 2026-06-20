@@ -82,7 +82,27 @@ def _cells_dim():  # Tier B spine (d full at n in {1e4,1e5}).
             for n in (10000, 100000) for d in ds]
 
 
-TIERS = {"pilot": _cells_pilot, "scaling": _cells_scaling, "dim": _cells_dim}
+def _cells_axes():
+    """Tier C -- the D1/D3/D4 sweep axes (design section 1). These decisions need axes the
+    timing spines hold fixed, so each cell here carries an `axis` tag and is expanded (only for
+    exact OPTICS) into config variants by `optics_jobs`:
+      * axis='eps_mode' -> D4 (uniform vs knee eps) x D3 (OnDemand vs Precompute), exact backend.
+        Density is the driver of both (eps estimators diverge by cluster structure; mode by
+        neighborhood size), so we sweep sparse/dense/mixed at d in {3,16}.
+      * axis='backend'  -> D1 (exact vs eps-approx{100,500,1000} vs HNSW) across the d-spine at a
+        fixed moderate n, to locate the crossover dim D* (HNSW's measured ~64-D regime, n~2e4)."""
+    cells = []
+    for dens in ("sparse", "dense", "mixed"):
+        for d in (3, 16):
+            cells.append(dict(n=8000, d=d, k=max(2, d // 2), density=dens, noise=0.05,
+                              shape="blobs", axis="eps_mode"))
+    for d in (3, 8, 16, 32, 64, 128):
+        cells.append(dict(n=20000, d=d, k=max(2, d // 2), density="mixed", noise=0.05,
+                          shape="blobs", axis="backend"))
+    return cells
+
+
+TIERS = {"pilot": _cells_pilot, "scaling": _cells_scaling, "dim": _cells_dim, "axes": _cells_axes}
 
 MEASURES = ("ordering_ms", "total_ms", "ari", "nmi", "rand", "n_clusters_pred", "eps_used", "status")
 
@@ -146,10 +166,12 @@ def reps_for(n, base_reps):
 
 
 # ---- engine runners: each returns dict(labels=np.array|None, ordering_ms, total_ms, eps, status) ----
-def run_ours(exe, algo, coords_path, labels_out, n, min_pts, mcs, metric, mode, projection, timeout):
+def run_ours(exe, algo, coords_path, labels_out, n, min_pts, mcs, metric, mode, projection, timeout,
+             eps="knee", backend="exact"):
     cmd = [exe, "--coords", coords_path, "--algo", algo, "--out-labels", labels_out,
-           "--min-pts", str(min_pts), "--min-cluster-size", str(mcs), "--eps", "knee",
-           "--metric", metric, "--mode", mode, "--projection", projection, "--threads", "4"]
+           "--min-pts", str(min_pts), "--min-cluster-size", str(mcs), "--eps", eps,
+           "--metric", metric, "--mode", mode, "--projection", projection,
+           "--backend", backend, "--threads", "4"]
     t0 = time.perf_counter()
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -238,6 +260,32 @@ def applicable_engines(c, exe, only=None):
     return eng
 
 
+def optics_jobs(c, exe, only, min_pts):
+    """Yield (engine, algo, mspace, config, eps, mode, backend) per cell.
+
+    Normal cells: one baseline job per applicable engine -- the config string is left EXACTLY as the
+    timing tiers used it (`{mspace}/knee/mp{min_pts}`), so resuming/refreshing a prior run still
+    matches. Axes cells (`c['axis']` set, Tier C): exact OPTICS only, swept into the D1/D3/D4 config
+    variants. The config encodes the variant (eps/mode/be), so each is a distinct, resumable row and
+    `analyze_matrix.py` can group by it."""
+    axis = c.get("axis")
+    if not axis:
+        for (e, a, m) in applicable_engines(c, exe, only):
+            yield (e, a, m, f"{m}/knee/mp{min_pts}", "knee", "ondemand", "exact")
+        return
+    if not exe or (only and "ours-optics" not in only):
+        return  # the axis sweeps are all exact-OPTICS variants
+    if axis == "eps_mode":          # D4 (eps) x D3 (mode)
+        for eps in ("knee", "uniform"):
+            for mode in ("ondemand", "precompute"):
+                yield ("ours-optics", "optics", "euclidean",
+                       f"euclidean/eps={eps}/mode={mode}/be=exact/mp{min_pts}", eps, mode, "exact")
+    elif axis == "backend":         # D1 (backend by dim)
+        for be in ("exact", "approx100", "approx500", "approx1000", "hnsw"):
+            yield ("ours-optics", "optics", "euclidean",
+                   f"euclidean/eps=knee/mode=ondemand/be={be}/mp{min_pts}", "knee", "ondemand", be)
+
+
 # ---- main loop -------------------------------------------------------------------------
 def main(argv=None):
     p = argparse.ArgumentParser(description="Run the 1.0.0 benchmark matrix.")
@@ -306,9 +354,9 @@ def main(argv=None):
         n_reps = reps_for(c["n"], args.reps)  # fewer reps as n grows (section 3b)
         for rep in range(n_reps):
             seed = args.seed + rep
-            todo = [(e, a, m) for (e, a, m) in applicable_engines(c, exe, only)
-                    if (cid, e, f"{m}/knee/mp{args.min_pts}", str(rep)) not in done]
-            if not todo:
+            jobs = [j for j in optics_jobs(c, exe, only, args.min_pts)
+                    if (cid, j[0], j[3], str(rep)) not in done]
+            if not jobs:
                 continue  # nothing to run for this (cell, rep) -- skip generation entirely
             coords = os.path.join(args.data_dir, f"{cid}_s{seed}.csv")
             X, y = G.generate(c["n"], c["d"], c["k"], c["density"], c["noise"], c["shape"], seed)
@@ -316,8 +364,7 @@ def main(argv=None):
             truth = y
             true_k = len(set(int(v) for v in y) - {-1})  # KMeans n_clusters
 
-            for engine, algo, mspace in todo:
-                config = f"{mspace}/knee/mp{args.min_pts}"
+            for engine, algo, mspace, config, eps, mode, backend in jobs:
                 ts = time.strftime("%Y-%m-%dT%H:%M:%S")
 
                 # feasibility gate
@@ -325,17 +372,17 @@ def main(argv=None):
                 if pred > args.budget_s:
                     _emit(writer, header, c, cid, args.tier, seed, rep, engine, config, mspace,
                           {"status": "skipped_budget"}, commit, threads, ts)
-                    print(f"  SKIP {cid} {engine}: predicted {pred:.0f}s > {args.budget_s:.0f}s budget")
+                    print(f"  SKIP {cid} {engine} [{config}]: predicted {pred:.0f}s > {args.budget_s:.0f}s budget")
                     fout.flush()
                     continue
 
+                tag = config.replace("/", "_").replace("=", "-")
+                labels_out = os.path.splitext(coords)[0] + f"_{engine}_{tag}.csv"
                 if engine.startswith("ours-"):
-                    labels_out = os.path.splitext(coords)[0] + f"_{engine}.csv"
                     r = run_ours(exe, algo, coords, labels_out, c["n"], args.min_pts, mcs,
                                  mspace if mspace in ("l2", "l1", "cosine") else "cosine",
-                                 "ondemand", "gaussian", args.budget_s)
+                                 mode, "gaussian", args.budget_s, eps=eps, backend=backend)
                 else:
-                    labels_out = os.path.splitext(coords)[0] + f"_{engine}.csv"
                     r = run_sklearn(engine, coords, labels_out, c["n"], true_k, args.min_pts, mcs,
                                     eps=1.0, timeout=args.budget_s)
 
@@ -347,7 +394,9 @@ def main(argv=None):
                 _emit(writer, header, c, cid, args.tier, seed, rep, engine, config, mspace,
                       vals, commit, threads, ts)
                 fout.flush()
-                print(f"  {cid} {engine:14s} status={r['status']:6s} ari={ari:.3f} ms={r['ordering_ms']}")
+                cfgnote = f" [{config}]" if c.get("axis") else ""
+                print(f"  {cid} {engine:14s}{cfgnote} status={r['status']:6s} "
+                      f"ari={ari:.3f} ms={r['ordering_ms']}")
 
     fout.close()
     print(f"done -> {args.out}")
