@@ -40,9 +40,12 @@ spec; it becomes part of the citable reference.
 ## 2. One-time setup
 
 ```sh
-# build the C++ per-cell executor in Release (this is what runs ours-*)
-cmake --preset msvc                                 # or: linux-gcc / linux-clang
-cmake --build --preset msvc --target optics_matrix
+# build the C++ per-cell executor in Release (this is what runs ours-*). Enable HNSW so the
+# axes tier's `hnsw` backend variant (D1) exists; without it that variant exits 3 and its rows
+# error. (Build only this target -- the full test build with HNSW trips MSVC /WX on vendored
+# hnswlib; the executor itself is clean.)
+cmake -S . -B build -DOPTICS_ENABLE_HNSW=ON          # or: cmake --preset msvc -DOPTICS_ENABLE_HNSW=ON
+cmake --build build --config Release --target optics_matrix
 ```
 
 Pin the worker-thread count so numbers are reproducible (the harness default is already 4; set it
