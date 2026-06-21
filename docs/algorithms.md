@@ -148,7 +148,7 @@ Where the headroom is, roughly by payoff. Tracked items link to their issue.
 
 | | Idea | Targets | Status |
 |---|------|---------|--------|
-| **A** | **Exact sub-quadratic MST** for HDBSCAN\* (dual-tree Borůvka or kNN-graph + HNSW) — lifts the `n ≈ 1e4` dense-Prim wall toward 1e5+ without touching the cosine approximation. | exact HDBSCAN\* scale | [**#66**](https://github.com/J-D-3/OPTICS-Clustering/issues/66) · **1.0.0** |
+| **A** | **Exact sub-quadratic MST** for HDBSCAN\* — lifts the `n ≈ 1e4` dense-Prim wall without touching the cosine approximation. **Phase 1 landed:** `MstAlgorithm::KnnGraph`, a near-exact k-NN-graph MST (Rand ≈ 1.0 vs exact, ~21× faster at n = 60k). **Phase 2 (queued):** an *exact* dual-tree Borůvka. | exact HDBSCAN\* scale | [**#66**](https://github.com/J-D-3/OPTICS-Clustering/issues/66) · **1.0.0** |
 | **C** | **Auto-dispatch front-end** — a thin `cluster()` that reads `n`, `d`, and a cheap density probe and applies the matrix's D1–D5 decisions (exact-vs-s, Precompute-vs-OnDemand, structured projections) so users never land on the wrong side of a crossover. | usability / never-wrong-default | [**#72**](https://github.com/J-D-3/OPTICS-Clustering/issues/72) · **1.0.0** |
 | B | **Adaptive `D` / recall early-exit** for sOPTICS — scale `n_projections` with `n`/`d` and stop once recall stabilizes, shrinking the fixed tax and moving the crossover left. | sOPTICS small-n cost | backlog |
 | D | **Auto-select structured (FHT) projections** past a dimension threshold (already opt-in, 1.2–1.4× at ≥ 64-D; folds into C). | sOPTICS high-d cost | backlog |
