@@ -93,6 +93,31 @@ public:
 		return std::sqrt( kth_sq );
 	}
 
+	// A point's up-to-k APPROXIMATE nearest neighbors as parallel (index, squared-distance) lists,
+	// ascending by distance and (when p is a stored point) self-inclusive. OVERWRITES out_idx/out_sq.
+	// Models the optional KnnGraph capability (issues #66/#73), so the k-NN-graph mutual-reachability
+	// MST in hdbscan() can run on the approximate HNSW graph instead of an exact KD-tree -- HNSW's
+	// query cost is largely dimension-independent, so this is the high-D play where the static-Dim
+	// KD-tree degrades. The graph (hence the MST and the final clustering) is approximate: recall is
+	// governed by the index's M / ef_construction and ef_search, and the connectivity fix-up in
+	// detail::sparse_graph_mst repairs whatever edges the approximate graph misses. Validate by Rand
+	// vs the exact backbones, not bit-identity. O(k log n) per query (hnswlib's native k-NN).
+	void knn_graph( const Point& p, std::size_t k, std::vector<std::size_t>& out_idx,
+					std::vector<double>& out_sq ) const {
+		out_idx.clear();
+		out_sq.clear();
+		const std::size_t kk = std::min<std::size_t>( k, n_ );
+		if ( kk == 0 ) { return; }
+		const std::array<float, Dim> q = to_float( p );
+		auto res = index_->searchKnnCloserFirst( q.data(), kk );  // (squared-dist, label), ascending
+		out_idx.reserve( res.size() );
+		out_sq.reserve( res.size() );
+		for ( const auto& dl : res ) {
+			out_idx.push_back( static_cast<std::size_t>( dl.second ) );
+			out_sq.push_back( static_cast<double>( dl.first ) );
+		}
+	}
+
 private:
 	static std::array<float, Dim> to_float( const Point& p ) {
 		std::array<float, Dim> q;
