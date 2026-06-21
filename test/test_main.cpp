@@ -20,6 +20,7 @@
 #include <optional>
 #include <random>
 #include <set>
+#include <thread>
 #include <vector>
 
 
@@ -1797,6 +1798,42 @@ TEST_CASE("hdbscan: separated blobs -> exact cluster count, agrees with ground t
 	// Deterministic: identical input => identical labelling.
 	const auto again = optics::hdbscan( pts, 5 );
 	CHECK( ( res.labels == again.labels ) );
+}
+
+
+TEST_CASE("hdbscan: concurrent calls are thread-safe (issue #68 regression)") {
+	// Regression for #68: cluster_image -> exact hdbscan (dedup) crashed when fanned across a thread
+	// pool on photo-like clouds. The fix is per-thread (thread_local) scratch in the core-distance
+	// scan (#55), so neither concurrent top-level calls nor each call's internal parallel
+	// core-distance threads race. hdbscan is deterministic for a fixed input, so every concurrent
+	// result must equal its sequential reference; under the ASan/UBSan CI job this same case also
+	// surfaces any data race / use-after-free in the parallel paths.
+	constexpr int kClouds = 4;
+	const std::vector<std::array<double, 3>> centers = { { 0, 0, 0 }, { 80, 0, 0 }, { 40, 70, 10 } };
+	std::vector<std::vector<std::array<double, 3>>> clouds;
+	for ( int c = 0; c < kClouds; ++c ) {
+		auto pts = optics::testdata::gaussian_blobs<double, 3>( centers, 70, 2.0 );
+		const auto noise = optics::testdata::uniform_noise<double, 3>( 40, -40.0, 110.0, 100 + c );
+		pts.insert( pts.end(), noise.begin(), noise.end() );  // noise-heavy, like a real photo
+		clouds.push_back( std::move( pts ) );
+	}
+
+	// Sequential references: the labelling each concurrent run must reproduce bit-for-bit.
+	std::vector<optics::HdbscanResult> refs;
+	for ( const auto& cloud : clouds ) { refs.push_back( optics::hdbscan( cloud, 10 ) ); }
+
+	for ( int round = 0; round < 3; ++round ) {
+		std::vector<optics::HdbscanResult> out( kClouds );
+		std::vector<std::thread> ws;
+		for ( int c = 0; c < kClouds; ++c ) {
+			ws.emplace_back( [&, c] { out[c] = optics::hdbscan( clouds[c], 10 ); } );
+		}
+		for ( auto& w : ws ) { w.join(); }
+		for ( int c = 0; c < kClouds; ++c ) {
+			CHECK( ( out[c].labels == refs[c].labels ) );
+			CHECK( out[c].n_clusters == refs[c].n_clusters );
+		}
+	}
 }
 
 
