@@ -1920,6 +1920,42 @@ TEST_CASE("hdbscan: Boruvka MST gives the same clustering as dense Prim (#66 Pha
 }
 
 
+TEST_CASE("hdbscan: Auto MST-backbone selection picks by (n, dim) (#72)") {
+	using optics::MstAlgorithm;
+	// Tiny n -> DensePrim regardless of dimension (the MST is a negligible few ms there).
+	CHECK( optics::detail::resolve_auto_mst( MstAlgorithm::Auto, 500, 3, true ) == MstAlgorithm::DensePrim );
+	CHECK( optics::detail::resolve_auto_mst( MstAlgorithm::Auto, 500, 32, true ) == MstAlgorithm::DensePrim );
+	// Above the small-n floor: low/mid dimension -> Boruvka (exact).
+	CHECK( optics::detail::resolve_auto_mst( MstAlgorithm::Auto, 5000, 3, true ) == MstAlgorithm::Boruvka );
+	CHECK( optics::detail::resolve_auto_mst( MstAlgorithm::Auto, 5000, 8, true ) == MstAlgorithm::Boruvka );
+	// High dimension -> KnnGraph when the backend has it, else Boruvka (still exact).
+	CHECK( optics::detail::resolve_auto_mst( MstAlgorithm::Auto, 5000, 16, true ) == MstAlgorithm::KnnGraph );
+	CHECK( optics::detail::resolve_auto_mst( MstAlgorithm::Auto, 5000, 16, false ) == MstAlgorithm::Boruvka );
+	CHECK( optics::detail::resolve_auto_mst( MstAlgorithm::Auto, 50000, 32, true ) == MstAlgorithm::KnnGraph );
+	// An explicit backbone passes through unchanged (Auto is opt-in, never forced).
+	CHECK( optics::detail::resolve_auto_mst( MstAlgorithm::DensePrim, 50000, 32, true ) == MstAlgorithm::DensePrim );
+	CHECK( optics::detail::resolve_auto_mst( MstAlgorithm::Boruvka, 500, 3, true ) == MstAlgorithm::Boruvka );
+}
+
+
+TEST_CASE("hdbscan: Auto backbone matches DensePrim clustering across regimes (#72)") {
+	// End to end: Auto must produce the same partition as the exact DensePrim baseline, whichever
+	// backbone it resolves to. n >= 1000 so it actually exercises Boruvka (low-D) and KnnGraph (high-D),
+	// not just the DensePrim small-n floor.
+	const auto run = []( const auto& pts, std::size_t mcs ) {
+		constexpr std::size_t Dim = std::tuple_size<std::decay_t<decltype( pts[0] )>>::value;
+		const auto dense = optics::hdbscan<double, Dim>( pts, mcs, 0, optics::ClusterSelectionMethod::EOM,
+														 false, 0, true, {}, optics::MstAlgorithm::DensePrim );
+		const auto autom = optics::hdbscan<double, Dim>( pts, mcs, 0, optics::ClusterSelectionMethod::EOM,
+														 false, 0, true, {}, optics::MstAlgorithm::Auto );
+		CHECK( autom.n_clusters == dense.n_clusters );
+		CHECK( rand_index( to_ll( autom.labels ), to_ll( dense.labels ) ) > 0.99 );
+	};
+	run( optics::testdata::make_blobs<double, 3>( 5, 300, 30.0, 1.0, 321u ), 15 );   // n=1500, low-D  -> Boruvka
+	run( optics::testdata::make_blobs<double, 16>( 4, 400, 20.0, 1.0, 5u ), 15 );    // n=1600, high-D -> KnnGraph
+}
+
+
 TEST_CASE("hdbscan: far-flung points are labelled noise") {
 	const std::vector<std::array<double, 2>> centers = { { 0, 0 }, { 100, 0 } };
 	auto pts = optics::testdata::gaussian_blobs<double, 2>( centers, 30, 1.0 );

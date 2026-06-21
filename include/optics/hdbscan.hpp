@@ -85,7 +85,12 @@ enum class ClusterSelectionMethod { EOM, Leaf };
 //               KD-tree (see detail/boruvka_mst.hpp). This is the one to use when you need both
 //               exactness AND scale (n past the ~1e4 dense-Prim ceiling). Works with any KnnCoreDist
 //               backend (the tree is internal; the backend only supplies core distances).
-enum class MstAlgorithm { DensePrim, KnnGraph, Boruvka };
+//   Auto      : pick the backbone from (n, dim) using the #66 crossover sweep (see resolve_auto_mst /
+//               docs/algorithms.md): tiny n -> DensePrim; low/mid dimension -> Boruvka (exact); high
+//               dimension -> KnnGraph (near-exact, faster there) when the backend supports it. Opt-in
+//               (the default stays DensePrim for back-compatibility); recommended for varied/large
+//               inputs. Pass an explicit backbone to override (e.g. Boruvka to force exact in high-D).
+enum class MstAlgorithm { DensePrim, KnnGraph, Boruvka, Auto };
 
 // Result of a HDBSCAN* run. `labels` and `probabilities` are parallel to the input points.
 struct HdbscanResult {
@@ -407,6 +412,27 @@ std::vector<MstEdge> knn_graph_mst( const std::vector<std::array<T, Dim>>& point
 		}
 	}
 	return sparse_graph_mst( edges, n );
+}
+
+
+//=== Auto MST-backbone selection (issue #72) ================================
+
+// Crossover thresholds from the #66 sweep (optics_hdbscan_mst_probe sweep, 4 threads, well-separated
+// blobs; see docs/algorithms.md). They are HEURISTICS tuned for the multi-core default; the boundaries
+// are soft (a tie around 12-D, a few-ms spread below ~1000), so exact values are not load-bearing.
+inline constexpr std::size_t kHdbscanAutoSmallN = 1000;  // below this every backbone is within a few ms
+inline constexpr std::size_t kHdbscanAutoDimHigh = 16;   // Boruvka wins <= 12-D; KnnGraph wins >= 16-D
+
+// Map MstAlgorithm::Auto to a concrete backbone from (n, dim); pass-through for any explicit choice.
+//   tiny n           -> DensePrim : MST is a negligible few ms; use the simplest, most-tested exact path.
+//   dim < kDimHigh   -> Boruvka   : exact and fastest at low/mid dimension.
+//   dim >= kDimHigh  -> KnnGraph  : near-exact but faster in high dimension (where the KD-tree prunes
+//                                   poorly) -- only when the backend models it, else Boruvka (exact).
+inline MstAlgorithm resolve_auto_mst( MstAlgorithm requested, std::size_t n, std::size_t dim, bool knn_available ) {
+	if ( requested != MstAlgorithm::Auto ) { return requested; }
+	if ( n < kHdbscanAutoSmallN ) { return MstAlgorithm::DensePrim; }
+	if ( dim < kHdbscanAutoDimHigh ) { return MstAlgorithm::Boruvka; }
+	return knn_available ? MstAlgorithm::KnnGraph : MstAlgorithm::Boruvka;
 }
 
 
@@ -803,7 +829,9 @@ inline HdbscanResult extract_from_mst( const std::vector<MstEdge>& mst, std::siz
 //                           is EXACT and sub-quadratic (same tree as DensePrim) -- the one for exact
 //                           clustering past that ceiling. KnnGraph is a near-exact sub-quadratic
 //                           k-NN-graph MST (requires KnnGraph<Backend>; falls back to DensePrim
-//                           otherwise). See MstAlgorithm and docs/algorithms.md.
+//                           otherwise). Auto picks among these from (n, dim) per the #66 crossover
+//                           sweep (recommended for varied/large inputs; opt-in -- the default stays
+//                           DensePrim for back-compatibility). See MstAlgorithm and docs/algorithms.md.
 //
 // Complexity: DensePrim is O(n^2) time / O(n) memory -- exact and simple, suited to small/medium n.
 // MstAlgorithm::Boruvka is exact and sub-quadratic; MstAlgorithm::KnnGraph is near-exact and
@@ -837,14 +865,15 @@ HdbscanResult hdbscan( const std::vector<std::array<T, Dim>>& points, std::size_
 	// is byte-for-byte the original path, keeping the pinned hdbscan: cases unchanged.
 	const auto build_mst = [&]( const std::vector<std::array<T, Dim>>& pts, const std::vector<std::size_t>& w )
 			-> std::vector<detail::MstEdge> {
-		(void)mst_algo;  // unused when Backend lacks KnnGraph (the if constexpr below is discarded)
+		// Resolve Auto -> a concrete backbone from (n, dim); pass-through for an explicit choice.
+		const MstAlgorithm algo = detail::resolve_auto_mst( mst_algo, pts.size(), Dim, KnnGraph<Backend, T, Dim> );
 		if constexpr ( KnnGraph<Backend, T, Dim> ) {
-			if ( mst_algo == MstAlgorithm::KnnGraph ) {
+			if ( algo == MstAlgorithm::KnnGraph ) {
 				return detail::knn_graph_mst<T, Dim, Backend>( pts, min_samples, n_threads, w );
 			}
 		}
 		const auto core = detail::hdbscan_core_distances<T, Dim, Backend>( pts, min_samples, n_threads, w );
-		if ( mst_algo == MstAlgorithm::Boruvka ) {
+		if ( algo == MstAlgorithm::Boruvka ) {
 			// Exact Boruvka over the component-aware KD-tree: same tree as dense Prim, sub-quadratic.
 			// Its BoruvkaEdge has the same (u, v, weight) layout as MstEdge; copy across.
 			const auto bedges = detail::exact_mutual_reachability_mst( pts, core, n_threads );
@@ -853,7 +882,7 @@ HdbscanResult hdbscan( const std::vector<std::array<T, Dim>>& points, std::size_
 			for ( const auto& e : bedges ) { mst.push_back( { e.u, e.v, e.weight } ); }
 			return mst;
 		}
-		return detail::mutual_reachability_mst( pts, core );
+		return detail::mutual_reachability_mst( pts, core );  // DensePrim (also the KnnGraph fallback)
 	};
 
 	// Explicit sample weights: weighted run on the points as given (labels parallel to the input).
