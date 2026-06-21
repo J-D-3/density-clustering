@@ -1393,6 +1393,9 @@ TEST_CASE("RadiusSearchWithDists: same neighbors as radius_search, exact squared
 // Only built when the optional HNSW backend is enabled (-DOPTICS_ENABLE_HNSW=ON). HNSW is
 // APPROXIMATE, so this asserts high (not exact) recall vs nanoflann in high-D and that an
 // end-to-end OPTICS run over it recovers the same well-separated clusters (#47).
+// NOTE (#71): instantiating the vendored hnswlib here trips MSVC C4701/C4703 (codegen warnings in
+// hnswalg.h) that hnsw_backend.hpp's `push(0)` cannot reach and an in-source pragma here does not
+// cover either; they are suppressed for this TU in test/CMakeLists.txt (MSVC + HNSW only).
 TEST_CASE("HnswBackend: high-D approximate recall + usable OPTICS clustering (#47)") {
 	constexpr std::size_t Dim = 16;
 	const auto pts = optics::testdata::make_blobs<double, Dim>( 5, 200, 30.0, 1.0, 71u );
