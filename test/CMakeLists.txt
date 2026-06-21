@@ -133,6 +133,11 @@ add_executable(optics_hdbscan_fixup_probe Benchmark/hdbscan_fixup_probe.cpp)
 target_link_libraries(optics_hdbscan_fixup_probe PRIVATE optics::optics)
 target_include_directories(optics_hdbscan_fixup_probe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Benchmark")
 
+# Round-adaptive dual-tree Boruvka (#75): per-point vs round-adaptive MST timing + exactness. Release.
+add_executable(optics_hdbscan_boruvka_dual_probe Benchmark/hdbscan_boruvka_dual_probe.cpp)
+target_link_libraries(optics_hdbscan_boruvka_dual_probe PRIVATE optics::optics)
+target_include_directories(optics_hdbscan_boruvka_dual_probe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Benchmark")
+
 # HNSW recall-vs-speed probe (#47): HNSW vs exact / eps-approx nanoflann in high-D. Only
 # built with the optional HNSW backend enabled. Release config; not a ctest.
 if(OPTICS_ENABLE_HNSW)
