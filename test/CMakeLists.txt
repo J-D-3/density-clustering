@@ -128,6 +128,11 @@ add_executable(optics_acq_sweep Benchmark/acq_sweep.cpp)
 target_link_libraries(optics_acq_sweep PRIVATE optics::optics)
 target_include_directories(optics_acq_sweep PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Benchmark")
 
+# Connectivity fix-up diagnostic (#74): sweep graph_k down, measure rand vs exact. Release; not a ctest.
+add_executable(optics_hdbscan_fixup_probe Benchmark/hdbscan_fixup_probe.cpp)
+target_link_libraries(optics_hdbscan_fixup_probe PRIVATE optics::optics)
+target_include_directories(optics_hdbscan_fixup_probe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Benchmark")
+
 # HNSW recall-vs-speed probe (#47): HNSW vs exact / eps-approx nanoflann in high-D. Only
 # built with the optional HNSW backend enabled. Release config; not a ctest.
 if(OPTICS_ENABLE_HNSW)
@@ -138,4 +143,9 @@ if(OPTICS_ENABLE_HNSW)
     add_executable(optics_hdbscan_hnsw_mst_probe Benchmark/hdbscan_hnsw_mst_probe.cpp)
     target_link_libraries(optics_hdbscan_hnsw_mst_probe PRIVATE optics::optics)
     target_include_directories(optics_hdbscan_hnsw_mst_probe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Benchmark")
+
+    # HDBSCAN* HNSW k-NN-graph MST build-parameter tuning (#73 follow-up). Release; not a ctest.
+    add_executable(optics_hdbscan_hnsw_tune_probe Benchmark/hdbscan_hnsw_tune_probe.cpp)
+    target_link_libraries(optics_hdbscan_hnsw_tune_probe PRIVATE optics::optics)
+    target_include_directories(optics_hdbscan_hnsw_tune_probe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Benchmark")
 endif()

@@ -45,13 +45,20 @@ namespace optics {
 // Approximate HNSW backend. M and ef_construction govern index quality/build cost; ef_search
 // governs query recall/cost (0 => a sensible default derived from ef_construction). hnswlib's
 // L2 space works in SQUARED distance, like nanoflann, so the radius is squared internally.
-template <typename T, std::size_t Dim>
+// The MDefault / EfConstructionDefault / EfSearchDefault template parameters set the ctor argument
+// defaults, so a tuned preset can be selected purely by type (the way ApproxNanoflannBackend bakes in
+// an eps) and flow through hdbscan()/compute_*, which construct the backend internally as Backend(pts)
+// and so only ever see the defaults. The runtime ctor args still override them. The base template keeps
+// the original 16 / 200 / 0 defaults, so HnswBackend<T,Dim> is byte-for-byte unchanged; see
+// FastHnswBackend below for the cheaper-build preset.
+template <typename T, std::size_t Dim, std::size_t MDefault = 16, std::size_t EfConstructionDefault = 200,
+		  std::size_t EfSearchDefault = 0>
 class HnswBackend {
 public:
 	using Point = std::array<T, Dim>;
 
-	explicit HnswBackend( const std::vector<Point>& points, std::size_t M = 16,
-						   std::size_t ef_construction = 200, std::size_t ef_search = 0 )
+	explicit HnswBackend( const std::vector<Point>& points, std::size_t M = MDefault,
+						   std::size_t ef_construction = EfConstructionDefault, std::size_t ef_search = EfSearchDefault )
 		: space_( Dim ), n_( points.size() ),
 		  ef_search_( ef_search != 0 ? ef_search : std::max<std::size_t>( ef_construction, 64 ) ) {
 		index_ = std::make_unique<hnswlib::HierarchicalNSW<float>>(
@@ -130,5 +137,15 @@ private:
 	std::size_t ef_search_;
 	std::unique_ptr<hnswlib::HierarchicalNSW<float>> index_;
 };
+
+// Cheaper-to-build HNSW preset for the k-NN-graph MST in hdbscan() (issues #73/#74). HDBSCAN* needs
+// only enough neighbour recall to recover the mutual-reachability MST, NOT high-recall ANN -- the
+// #73 measurement found Rand = 1.0 vs exact at the default 16/200, i.e. recall to spare. A smaller
+// graph (M = 8) built with a shallower search (ef_construction = 48) cuts the index build -- HNSW's
+// dominant cost -- so the exact-vs-HNSW crossover moves to a smaller n while the clustering stays
+// effectively identical on separable data. Use as the Backend type:
+//   hdbscan<double, Dim, FastHnswBackend<double, Dim>>( pts, mcs, ..., MstAlgorithm::KnnGraph ).
+template <typename T, std::size_t Dim>
+using FastHnswBackend = HnswBackend<T, Dim, 8, 48, 0>;
 
 }  // namespace optics
