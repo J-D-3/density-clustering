@@ -27,6 +27,24 @@ OPTICS is a density-based clustering algorithm. It does **not** need the number 
 **Be honest about the trade-offs.** If your clusters are roughly convex and you know *k*, **k-means** is far faster and perfectly adequate. If a single density threshold separates your clusters, **DBSCAN** is simpler and quick. Reach for **OPTICS** when you don't know *k*, when clusters sit at *different* densities (where one DBSCAN `eps` can't win), or when you want to *see* the cluster hierarchy via the reachability plot before committing to a cut. OPTICS is the most general of the three — and the most expensive. Its runtime cost is dominated by neighbor queries and, by its algorithmic structure, it cannot be as fast as k-means. That said, we are much faster than other OPTICS implementations — even faster than scikit-learn's DBSCAN — and have faster neighborhood-search strategies on the roadmap.
 → Quantitative runtime comparisons (this library's backends vs scikit-learn OPTICS, DBSCAN, and k-means, across sample sizes and dimensions) are in **[`perf/README.md`](perf/README.md)**.
 
+## The four algorithms: OPTICS, sOPTICS, HDBSCAN\*, sHDBSCAN
+
+Beyond plain OPTICS, the library ships three relatives. They split along two axes — *what structure they build* (a 1-D reachability **ordering** vs. a cluster **hierarchy**) and *how they find neighbors* (an **exact** KD-tree search vs. **approximate** CEOs random projections):
+
+| | output | neighbors | metric | exact? | reach for it when |
+|---|---|---|---|:---:|---|
+| **OPTICS** | reachability ordering | exact KD-tree | Euclidean | yes | the default — low/medium-D, you want the exact ordering |
+| **HDBSCAN\*** | cluster hierarchy → labels | exact k-NN | Euclidean | yes | you want a parameter-light hierarchy (`min_cluster_size` only, no `epsilon`) that tolerates varying density |
+| **sOPTICS** | reachability ordering | CEOs random projections | **cosine** (L2/L1 via kernel features) | approx | high dimension (≳ 16-D) or very large `n`, and your similarity is angular |
+| **sHDBSCAN** | cluster hierarchy → labels | CEOs random projections | **cosine** | approx | HDBSCAN\* clustering at `n ≳ 1e5`, where the exact `O(n²)` MST is infeasible |
+
+Two facts worth knowing up front, both explained in the secondary doc:
+
+- **Why the "s" variants are cosine.** CEOs finds neighbors by ranking *inner products* (random projections preserve inner-product order), which is intrinsically angular — so points are L2-normalized onto the unit sphere where Euclidean distance is monotone in cosine distance. L2/L1 are supported by first embedding into random kernel features, then running the same cosine pipeline.
+- **Why the "s" variants are *slower* on small data.** They pay a large fixed `O(n·D·Dim)` projection cost up front. That only pays off once dimension and/or `n` make the exact neighbor search expensive; below the crossover, exact OPTICS/HDBSCAN\* win.
+
+→ **Full comparison** — the two design seams, the cosine derivation, the small-`n` crossover, and the efficiency roadmap — in **[`docs/algorithms.md`](docs/algorithms.md)**.
+
 ## Quickstart: cluster your own data
 ### C++ integration
 This library is header-only. Simply add `include/` to your include path and add `#include <optics/optics.hpp>`.
@@ -162,6 +180,7 @@ Tuning knobs — and the matrix **confirms the defaults are the right ones** for
 
 ## Documentation
 
+- **[`docs/algorithms.md`](docs/algorithms.md)** — the four algorithms compared (OPTICS / sOPTICS / HDBSCAN\* / sHDBSCAN): when to use which, why the statistical variants are cosine, why they cost more on small data, and the efficiency roadmap.
 - **[`docs/benchmarking.md`](docs/benchmarking.md)** — the 1.0.0 reference benchmark matrix (speed/quality vs scikit-learn, decisions D1–D5), datasets, and the fairness rules for a comparison.
 - **[`perf/README.md`](perf/README.md)** — performance: benchmarks, scaling, backend & cross-library comparisons, the approximate-backend analysis.
 - **[`examples/cluster_csv/README.md`](examples/cluster_csv/README.md)** — cluster your own CSV (2/3/4/16-D), all options.
