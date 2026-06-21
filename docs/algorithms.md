@@ -244,6 +244,18 @@ Because clustering needs only enough recall to recover the MST (not high-recall 
 faster than the default HNSW index, moving the exact-vs-HNSW crossover left. Use the exact backbones
 below that crossover; reach for the HNSW source only in the genuinely high-d, very-large-n regime.
 
+### Why not a ball/cover tree for exact Borůvka in high-d? (#76 — investigated, declined)
+
+A natural idea is to keep *exact* Borůvka competitive past 16-D with a tighter spatial bound — the
+KD-tree's axis-aligned box bound prunes ~27× worse at 16-D than 3-D (≈82 vs ≈3 nodes visited per
+query, via the `-DOPTICS_BORUVKA_PROFILE` counters). But a prototype that tightened the prune with a
+per-node centroid+radius **ball** bound (`max(box, ball)`, exact — identical MST weight) recovered
+little: ~1.1–1.16× at 24–32-D and a *regression* below 24-D (the per-node `O(Dim)` ball-distance cost
+outweighs the pruning saved). That does not close the ~2.8× gap to `KnnGraph`, which `Auto` already
+picks for `dim ≥ 16` at Rand 1.0 — so a full ball/cover tree would not change the policy. The high-d
+regime is better served by `KnnGraph` and the HNSW source above; #76 was therefore declined (the
+finding is recorded in `detail/boruvka_mst.hpp`).
+
 ## OPTICS acquisition auto-selection (#72)
 
 OPTICS has two **metric-preserving** acquisition knobs that only affect speed/memory, never the
