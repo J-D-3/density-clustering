@@ -349,6 +349,55 @@ TEST_CASE("core_dist_mode parity: Knn matches Scan") {
 }
 
 
+TEST_CASE("Auto acquisition resolution: NeighborMode/CoreDistMode by (n, dim, density) (#72)") {
+	using optics::NeighborMode;
+	using optics::CoreDistMode;
+	const auto resolve = optics::detail::resolve_auto_acquisition;
+	const std::size_t big = std::size_t( 1 ) << 40;  // 1 TiB budget: the cache always "fits" here
+
+	// low-dimensional dense -> OnDemand + Knn (avoid materialising / scanning huge neighborhoods).
+	auto r1 = resolve( NeighborMode::Auto, CoreDistMode::Auto, 20000, 3, 2000.0, true, big );
+	CHECK( r1.first == NeighborMode::OnDemand );
+	CHECK( r1.second == CoreDistMode::Knn );
+	// low-dimensional sparse -> Precompute + Scan (parallel cache wins, cache fits).
+	auto r2 = resolve( NeighborMode::Auto, CoreDistMode::Auto, 20000, 3, 50.0, true, big );
+	CHECK( r2.first == NeighborMode::Precompute );
+	CHECK( r2.second == CoreDistMode::Scan );
+	// high-dimensional dense -> Precompute + Scan (search-bound: parallel cache wins; Knn would lose).
+	auto r3 = resolve( NeighborMode::Auto, CoreDistMode::Auto, 20000, 16, 2000.0, true, big );
+	CHECK( r3.first == NeighborMode::Precompute );
+	CHECK( r3.second == CoreDistMode::Scan );
+	// cache over budget -> OnDemand even when not low-D-dense (the memory-safety override).
+	auto r4 = resolve( NeighborMode::Auto, CoreDistMode::Scan, 1000000, 16, 2000.0, true, std::size_t( 1 ) << 20 );
+	CHECK( r4.first == NeighborMode::OnDemand );
+	// Knn unavailable -> Scan even when low-D dense.
+	auto r5 = resolve( NeighborMode::OnDemand, CoreDistMode::Auto, 20000, 3, 2000.0, false, big );
+	CHECK( r5.second == CoreDistMode::Scan );
+	// Explicit choices pass through untouched (Auto is opt-in, never forced).
+	auto r6 = resolve( NeighborMode::Precompute, CoreDistMode::Knn, 20000, 3, 2000.0, true, big );
+	CHECK( r6.first == NeighborMode::Precompute );
+	CHECK( r6.second == CoreDistMode::Knn );
+}
+
+
+TEST_CASE("Auto acquisition is byte-identical to explicit modes (#72)") {
+	// NeighborMode and CoreDistMode never change the ordering, so Auto -- whichever backbone it
+	// resolves to -- must produce reachability bit-identical to the explicit OnDemand + Scan baseline.
+	const auto check = []( const auto& pts, std::size_t min_pts, double eps ) {
+		constexpr std::size_t Dim = std::tuple_size<std::decay_t<decltype( pts[0] )>>::value;
+		const auto base = optics::compute_reachability_dists<double, Dim>(
+			pts, min_pts, eps, optics::NeighborMode::OnDemand, 0, optics::CoreDistMode::Scan );
+		const auto autom = optics::compute_reachability_dists<double, Dim>(
+			pts, min_pts, eps, optics::NeighborMode::Auto, 0, optics::CoreDistMode::Auto );
+		REQUIRE( base.size() == autom.size() );
+		CHECK( ( base == autom ) );  // exact: same point order AND same reach_dist
+	};
+	check( optics::testdata::make_blobs<double, 3>( 5, 400, 30.0, 1.0, 7u ), 10, 2.0 );    // low-D, sparser
+	check( optics::testdata::make_blobs<double, 3>( 4, 800, 8.0, 1.0, 11u ), 10, 6.0 );    // low-D, denser
+	check( optics::testdata::make_blobs<double, 16>( 3, 200, 20.0, 1.0, 5u ), 10, -1.0 );  // high-D, auto-eps
+}
+
+
 TEST_CASE("approximate backend: bounded recall + interchangeable clustering") {
 	// The approximate backend (issue #28) trades boundary recall for speed via
 	// nanoflann's eps-approximation. On well-separated blobs in a higher-D space it
