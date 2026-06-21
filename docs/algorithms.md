@@ -149,7 +149,7 @@ Where the headroom is, roughly by payoff. Tracked items link to their issue.
 | | Idea | Targets | Status |
 |---|------|---------|--------|
 | **A** | **Exact sub-quadratic MST** for HDBSCAN\* — lifts the `n ≈ 1e4` dense-Prim wall without touching the cosine approximation. **Both landed:** `MstAlgorithm::Boruvka` (EXACT — same total MST weight as dense Prim — via Borůvka over a component-aware KD-tree; ~30× faster at n = 60k in low-D) and `MstAlgorithm::KnnGraph` (near-exact, Rand ≈ 1.0; the faster choice in high-D where KD-tree pruning degrades). | exact HDBSCAN\* scale | [**#66**](https://github.com/J-D-3/OPTICS-Clustering/issues/66) · **1.0.0** |
-| **C** | **Auto-dispatch front-end** — a thin `cluster()` that reads `n`, `d`, and a cheap density probe and applies the matrix's D1–D5 decisions (exact-vs-s, Precompute-vs-OnDemand, structured projections) so users never land on the wrong side of a crossover. | usability / never-wrong-default | [**#72**](https://github.com/J-D-3/OPTICS-Clustering/issues/72) · **1.0.0** |
+| **C** | **Auto-dispatch front-end** — pick the engine from `n`/`d` so users never land on the wrong side of a crossover. **First slice landed:** `MstAlgorithm::Auto` selects the HDBSCAN\* MST backbone by (n, dim) from the [crossover sweep](#hdbscan-mst-backbone-auto-selection-72) below. **Remaining:** the OPTICS-side D1–D5 routing (exact-vs-s, Precompute-vs-OnDemand, structured projections). | usability / never-wrong-default | [**#72**](https://github.com/J-D-3/OPTICS-Clustering/issues/72) · **1.0.0** |
 | B | **Adaptive `D` / recall early-exit** for sOPTICS — scale `n_projections` with `n`/`d` and stop once recall stabilizes, shrinking the fixed tax and moving the crossover left. | sOPTICS small-n cost | backlog |
 | D | **Auto-select structured (FHT) projections** past a dimension threshold (already opt-in, 1.2–1.4× at ≥ 64-D; folds into C). | sOPTICS high-d cost | backlog |
 | E | **Share CEOs work** between sOPTICS and sHDBSCAN when both run on the same cloud. | redundant projection | backlog |
@@ -158,6 +158,35 @@ Where the headroom is, roughly by payoff. Tracked items link to their issue.
 The two highest-leverage items are **A** (removes a hard scale wall on the *exact* path) and **C**
 (turns the benchmark study into a runtime policy). Both are queued for **1.0.0**; the rest are
 opportunistic. The plan for A lives on [#66](https://github.com/J-D-3/OPTICS-Clustering/issues/66).
+
+## HDBSCAN\* MST-backbone auto-selection (#72)
+
+`hdbscan(..., MstAlgorithm::Auto)` picks the MST backbone from `(n, dim)` instead of asking you to
+know the crossover. The thresholds are **measured**, not guessed — from the `#66` crossover sweep
+(`optics_hdbscan_mst_probe sweep`, 4 threads, well-separated blobs; `knn_rand` is KnnGraph's agreement
+with exact Borůvka):
+
+| dim | n = 8 000 | n = 32 000 | n = 64 000 | fastest |
+|----:|----------:|-----------:|-----------:|---------|
+| 3 | Bor 19 / Knn 31 | Bor 69 / Knn 141 | Bor 158 / Knn 288 | **Borůvka** (exact) |
+| 8 | Bor 39 / Knn 50 | Bor 258 / Knn 308 | Bor 629 / Knn 792 | **Borůvka** (exact) |
+| 12 | Bor 78 / Knn 59 | Bor 598 / Knn 504 | Bor 1755 / Knn 1756 | ~tie |
+| 16 | Bor 119 / Knn 73 | Bor 725 / Knn 606 | Bor 2673 / Knn 2227 | **KnnGraph** (~exact) |
+| 32 | Bor 271 / Knn 95 | Bor 2721 / Knn 943 | Bor 10963 / Knn 3854 | **KnnGraph** (2.8×) |
+
+(ms; dense-Prim omitted — it is `O(n²)` and never the fastest, e.g. 5453 ms at n = 64k/3-D.)
+`knn_rand = 1.0` across the grid (no measured quality loss on these blobs). The resulting policy
+(`detail::resolve_auto_mst`):
+
+- **n < 1 000** → `DensePrim` — every backbone is within a few ms; use the simplest, most-tested exact path.
+- **dim < 16** → `Borůvka` — exact and fastest at low/mid dimension (wins ≤ 12-D, ties at 12 where
+  exactness is the tie-breaker).
+- **dim ≥ 16** → `KnnGraph` (near-exact, faster where the KD-tree prunes poorly) when the backend
+  supports it, else `Borůvka` (still exact).
+
+Auto is **opt-in** — the default stays `DensePrim` (exact, unchanged behaviour). Pass an explicit
+backbone to override, e.g. `MstAlgorithm::Boruvka` to force exact in high dimension. The thresholds are
+heuristics tuned for the multi-core default and the boundaries are soft; an explicit choice always wins.
 
 ## See also
 
