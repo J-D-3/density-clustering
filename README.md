@@ -1,4 +1,4 @@
-[![CI](https://github.com/J-D-3/OPTICS-Clustering/actions/workflows/ci.yml/badge.svg)](https://github.com/J-D-3/OPTICS-Clustering/actions/workflows/ci.yml)
+[![CI](https://github.com/J-D-3/density-clustering/actions/workflows/ci.yml/badge.svg)](https://github.com/J-D-3/density-clustering/actions/workflows/ci.yml)
 
 # density-clustering
 
@@ -6,7 +6,7 @@
 
 It offers **four algorithms** behind one consistent API:
 
-- **OPTICS** (Ankerst et al., 1999) — the namesake. Produces a reachability *ordering* (a [reachability plot](https://github.com/J-D-3/OPTICS-Clustering/blob/master/resources/reachabilityplot.png)) you cut at one or many density scales. Background: [paper](https://github.com/J-D-3/OPTICS-Clustering/blob/master/background/OPTICS.pdf), [Wikipedia](https://en.wikipedia.org/wiki/OPTICS_algorithm), [YouTube](https://www.youtube.com/watch?v=8kJjgowewOs).
+- **OPTICS** (Ankerst et al., 1999) — the namesake. Produces a reachability *ordering* (a [reachability plot](https://github.com/J-D-3/density-clustering/blob/master/resources/reachabilityplot.png)) you cut at one or many density scales. Background: [paper](https://github.com/J-D-3/density-clustering/blob/master/background/OPTICS.pdf), [Wikipedia](https://en.wikipedia.org/wiki/OPTICS_algorithm), [YouTube](https://www.youtube.com/watch?v=8kJjgowewOs).
 - **HDBSCAN\*** (Campello et al., 2013) — a parameter-light cluster *hierarchy* condensed by stability; no `epsilon`, just `min_cluster_size`. Background: John Healy's talk *[HDBSCAN, Fast Density Based Clustering, the How and the Why](https://youtu.be/dGsxd67IFiU)*.
 - **sOPTICS** / **sHDBSCAN** — scalable, **approximate** cosine variants via random projections (sDBSCAN/sOPTICS, Xu & Pham 2024) for the high-dimensional or very-large-`n` regime.
 

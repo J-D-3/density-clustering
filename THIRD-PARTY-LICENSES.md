@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-OPTICS-Clustering itself is licensed under the MIT License (see `LICENSE`). It
+density-clustering itself is licensed under the MIT License (see `LICENSE`). It
 bundles the third-party components below. Their licenses are reproduced here;
 the copyright notices are retained in the vendored source files as well.
 
@@ -14,7 +14,7 @@ the copyright notices are retained in the vendored source files as well.
 Only **nanoflann** is part of the default library you compile against. **hnswlib** is
 vendored but compiled only when the optional `OPTICS_ENABLE_HNSW` backend is enabled (off
 by default). doctest and nanobench are used solely to build the tests/benchmarks and are
-not required to use OPTICS-Clustering.
+not required to use density-clustering.
 
 ---
 

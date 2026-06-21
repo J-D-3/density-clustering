@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Visualize OPTICS-Clustering CSV output with matplotlib.
+"""Visualize density-clustering CSV output with matplotlib.
 
 Reads the CSVs written by optics::io (points-with-labels and the reachability
 ordering) and renders, dimension-agnostically:

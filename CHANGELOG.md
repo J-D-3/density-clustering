@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to OPTICS-Clustering are documented here. The format is based
+All notable changes to density-clustering are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 

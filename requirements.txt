@@ -1,4 +1,4 @@
-# Python dependencies for the OPTICS-Clustering tooling and examples.
+# Python dependencies for the density-clustering tooling and examples.
 # These drive only the *optional* visualization / comparison / validation glue;
 # the C++ library itself has no Python (or any other) runtime dependency.
 #

@@ -99,7 +99,7 @@ the only way to support them is to first embed points into **random Fourier feat
 approximate a Gaussian (L2) or Laplacian (L1) kernel — both monotone-decreasing in the original
 distance — then run the *same cosine pipeline* on the features. So L2/L1 cost an **extra embedding
 pass** and are an approximation of an approximation. (χ² / Jensen-Shannon are not yet supported —
-[#67](https://github.com/J-D-3/OPTICS-Clustering/issues/67).)
+[#67](https://github.com/J-D-3/density-clustering/issues/67).)
 
 > **Practical consequence:** scoring sOPTICS/sHDBSCAN on Euclidean toy layouts is a *metric mismatch,
 > not a defect*. Evaluate them on direction-based ("cosine blob") data — that is why those datasets
@@ -148,8 +148,8 @@ Where the headroom is, roughly by payoff. Tracked items link to their issue.
 
 | | Idea | Targets | Status |
 |---|------|---------|--------|
-| **A** | **Exact sub-quadratic MST** for HDBSCAN\* — lifts the `n ≈ 1e4` dense-Prim wall without touching the cosine approximation. **Both landed:** `MstAlgorithm::Boruvka` (EXACT — same total MST weight as dense Prim — via Borůvka over a component-aware KD-tree; ~30× faster at n = 60k in low-D) and `MstAlgorithm::KnnGraph` (near-exact, Rand ≈ 1.0; the faster choice in high-D where KD-tree pruning degrades). | exact HDBSCAN\* scale | [**#66**](https://github.com/J-D-3/OPTICS-Clustering/issues/66) · **1.0.0** |
-| **C** | **Auto-dispatch front-end** — pick the engine from `n`/`d` so users never land on the wrong side of a crossover. **First slice landed:** `MstAlgorithm::Auto` selects the HDBSCAN\* MST backbone by (n, dim) from the [crossover sweep](#hdbscan-mst-backbone-auto-selection-72) below. **Remaining:** the OPTICS-side D1–D5 routing (exact-vs-s, Precompute-vs-OnDemand, structured projections). | usability / never-wrong-default | [**#72**](https://github.com/J-D-3/OPTICS-Clustering/issues/72) · **1.0.0** |
+| **A** | **Exact sub-quadratic MST** for HDBSCAN\* — lifts the `n ≈ 1e4` dense-Prim wall without touching the cosine approximation. **Both landed:** `MstAlgorithm::Boruvka` (EXACT — same total MST weight as dense Prim — via Borůvka over a component-aware KD-tree; ~30× faster at n = 60k in low-D) and `MstAlgorithm::KnnGraph` (near-exact, Rand ≈ 1.0; the faster choice in high-D where KD-tree pruning degrades). | exact HDBSCAN\* scale | [**#66**](https://github.com/J-D-3/density-clustering/issues/66) · **1.0.0** |
+| **C** | **Auto-dispatch front-end** — pick the engine from `n`/`d` so users never land on the wrong side of a crossover. **First slice landed:** `MstAlgorithm::Auto` selects the HDBSCAN\* MST backbone by (n, dim) from the [crossover sweep](#hdbscan-mst-backbone-auto-selection-72) below. **Remaining:** the OPTICS-side D1–D5 routing (exact-vs-s, Precompute-vs-OnDemand, structured projections). | usability / never-wrong-default | [**#72**](https://github.com/J-D-3/density-clustering/issues/72) · **1.0.0** |
 | B | **Adaptive `D` / recall early-exit** for sOPTICS — scale `n_projections` with `n`/`d` and stop once recall stabilizes, shrinking the fixed tax and moving the crossover left. | sOPTICS small-n cost | backlog |
 | D | **Auto-select structured (FHT) projections** past a dimension threshold (already opt-in, 1.2–1.4× at ≥ 64-D; folds into C). | sOPTICS high-d cost | backlog |
 | E | **Share CEOs work** between sOPTICS and sHDBSCAN when both run on the same cloud. | redundant projection | backlog |
@@ -157,7 +157,7 @@ Where the headroom is, roughly by payoff. Tracked items link to their issue.
 
 The two highest-leverage items are **A** (removes a hard scale wall on the *exact* path) and **C**
 (turns the benchmark study into a runtime policy). Both are queued for **1.0.0**; the rest are
-opportunistic. The plan for A lives on [#66](https://github.com/J-D-3/OPTICS-Clustering/issues/66).
+opportunistic. The plan for A lives on [#66](https://github.com/J-D-3/density-clustering/issues/66).
 
 ## HDBSCAN\* MST-backbone auto-selection (#72)
 

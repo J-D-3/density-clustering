@@ -20,7 +20,7 @@ opencv = ["opencv-python>=4.5"]
 test = ["pytest>=7"]
 
 [project.urls]
-Homepage = "https://github.com/J-D-3/OPTICS-Clustering"
+Homepage = "https://github.com/J-D-3/density-clustering"
 
 [tool.scikit-build]
 minimum-version = "0.10"

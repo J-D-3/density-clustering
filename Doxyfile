@@ -1,7 +1,7 @@
-# Minimal Doxygen config for the OPTICS-Clustering public API. Unset tags use
+# Minimal Doxygen config for the density-clustering public API. Unset tags use
 # Doxygen defaults. Build with:  cmake --build build --target docs  (needs Doxygen),
 # or directly:  doxygen Doxyfile
-PROJECT_NAME           = "OPTICS-Clustering"
+PROJECT_NAME           = "density-clustering"
 PROJECT_BRIEF          = "Header-only C++20 OPTICS density-based clustering"
 OUTPUT_DIRECTORY       = docs/api
 INPUT                  = include/optics README.md

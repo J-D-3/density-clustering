@@ -31,7 +31,7 @@ from PIL import Image
 
 IMAGES_ROOT = Path(r"C:\Users\ingop\OneDrive\01_Dokumente\AXON_Firma\ColorClustering")
 PREPROCESSED = IMAGES_ROOT / "Preprocessed"
-HARNESS = Path(r"C:\Repositories\OPTICS-Clustering\build\examples\Release\color_study.exe")
+HARNESS = Path(r"C:\Repositories\density-clustering\build\examples\Release\color_study.exe")
 OUT = Path(__file__).resolve().parent / "out"
 
 
