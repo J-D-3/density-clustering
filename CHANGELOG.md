@@ -7,6 +7,29 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
 ## [Unreleased]
 
 ### Added
+- **Sub-quadratic HDBSCAN\* MST backbones** (#66): `optics::hdbscan(...)` gained a trailing
+  `MstAlgorithm` argument selecting how the mutual-reachability MST is built, lifting the exact
+  clusterer past the `~1e4` dense-Prim ceiling. **`Boruvka`** is EXACT and sub-quadratic — the same
+  tree as dense Prim (identical total weight), built by Borůvka's algorithm over a purpose-built
+  component-aware KD-tree with parallel rounds (~30–40× over dense Prim at n = 60k in low/mid-D).
+  **`KnnGraph`** is near-exact (Rand ≈ 1.0), building each point's exact k-NN graph and an MST over it
+  — faster in high dimension, where the KD-tree prunes poorly. **`Auto`** picks the backbone from
+  `(n, dim)` per a measured crossover sweep (`detail::resolve_auto_mst`: tiny n → DensePrim; dim < 16 →
+  Boruvka; dim ≥ 16 → KnnGraph). The default stays **`DensePrim`** (exact, behaviour unchanged). Adds
+  the `NanoflannBackend::knn_graph` capability + `detail/boruvka_mst.hpp`; the condense/stability/label
+  tail is reused verbatim. See `docs/algorithms.md`. (A leaf-batched dual-tree variant was tried and
+  reverted — documented in-header; remaining refinements tracked in #73–#77.)
+- **Auto acquisition selection for OPTICS** (#72): `compute_reachability_dists` accepts
+  `NeighborMode::Auto` and `CoreDistMode::Auto`, which pick the metric-preserving acquisition knobs
+  (Precompute-vs-OnDemand, Scan-vs-Knn) from a one-time density probe. Both are **byte-identical** to
+  the explicit modes — Auto changes only speed/memory, never the ordering. Grounded in a measured sweep
+  (`optics_acq_sweep`): *low-dimensional dense* clouds (Dim ≤ 8 and avg-neighbors > ~1000) use
+  **OnDemand + Knn**; everything else uses **Precompute + Scan**, with an OnDemand override when the
+  estimated neighbor cache would exceed budget. (The sweep corrected the naïve "Precompute wherever the
+  cache fits" reading of benchmark decision D3: on low-D dense clouds Precompute is 3–10× slower well
+  below the memory wall.) Defaults stay **`OnDemand` + `Scan`**. Routing exact OPTICS to the
+  approximate cosine **sOPTICS** is deliberately *not* auto — that is a metric change, so it stays an
+  explicit opt-in. See `docs/algorithms.md`.
 - **Python bindings for sHDBSCAN and sOPTICS** (#52, #50, #23): `optics_py.shdbscan(points,
   min_cluster_size, min_samples=0, method="eom", seed=42, metric="cosine", n_threads=0)` exposes
   the scalable approximate HDBSCAN\* (same dict return as `hdbscan`); `optics_py.soptics(points,
@@ -160,6 +183,13 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
   `docs/benchmarking.md`.
 
 ### Changed
+- **Project renamed `OPTICS-Clustering` → `density-clustering`** to reflect its scope — a suite of
+  density-based clustering algorithms (OPTICS, HDBSCAN\*, and the scalable sOPTICS / sHDBSCAN), not
+  OPTICS alone. The README now leads with the algorithm comparison, and the GitHub repository was
+  renamed (old URLs redirect). **The C++ identity is unchanged and kept stable for compatibility**: the
+  `optics::` namespace, the `<optics/optics.hpp>` header path, and the CMake package
+  (`find_package(optics)`, target `optics::optics`) are all the same. Only the project *display* name
+  (CMake `project()`, Doxygen, CITATION) changed.
 - **sOPTICS auto-epsilon is now data-scaled** (#58): when `epsilon <= 0`,
   `compute_soptics_reachability_dists` estimates a generating distance from the data
   (`epsilon_estimation` on the unit-sphere points) instead of the old permissive `2.0` ("keep all
