@@ -118,6 +118,28 @@ speed, not cross-library quality.
 [`algorithms.md` § MST-backbone auto-selection](algorithms.md#hdbscan-mst-backbone-auto-selection-72);
 caveats: thresholds are multi-core-tuned heuristics with soft boundaries (12-D is a genuine tie).
 
+### D1/D3 follow-up — the OPTICS acquisition crossover (#72)
+
+The OPTICS-side auto-dispatch (`NeighborMode::Auto` + `CoreDistMode::Auto`) tunes the two
+**metric-preserving** acquisition knobs (Precompute-vs-OnDemand, Scan-vs-Knn) — both byte-identical to
+the explicit modes, so this is purely a speed study. `optics_acq_sweep` sweeps ε (hence the average
+neighborhood size) at fixed n.
+
+**Reference run (2026-06-21, 4 threads).** The crossover is **dimension × density**, and it **corrects**
+the naïve reading of D3: where the cache *fits*, Precompute is **not** always faster —
+
+| regime | fastest | margin |
+|--------|---------|--------|
+| low-D (≤ 8) + dense (avg-nbrs > ~1000) | **OnDemand + Knn** | Precompute 3–10× *slower* (cache memory-traffic, well below the memory wall) |
+| low-D + sparse | **Precompute + Scan** | 1.1–2× |
+| high-D (≥ 16), any density | **Precompute + Scan** | Knn up to 4× *slower* (the extra k-NN query is costly in high-D) |
+
+So the Auto rule is *low-D dense → OnDemand + Knn; else Precompute + Scan, with an OnDemand override
+when the estimated cache exceeds budget.* Full table + rationale in
+[`algorithms.md` § OPTICS acquisition auto-selection](algorithms.md#optics-acquisition-auto-selection-72).
+sOPTICS routing is deliberately **not** auto (D2 is a metric change, not an engine swap). Auto is
+opt-in; defaults stay OnDemand + Scan.
+
 ## Engines compared
 
 | engine | how | status |

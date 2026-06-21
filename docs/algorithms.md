@@ -149,7 +149,7 @@ Where the headroom is, roughly by payoff. Tracked items link to their issue.
 | | Idea | Targets | Status |
 |---|------|---------|--------|
 | **A** | **Exact sub-quadratic MST** for HDBSCAN\* — lifts the `n ≈ 1e4` dense-Prim wall without touching the cosine approximation. **Both landed:** `MstAlgorithm::Boruvka` (EXACT — same total MST weight as dense Prim — via Borůvka over a component-aware KD-tree; ~30× faster at n = 60k in low-D) and `MstAlgorithm::KnnGraph` (near-exact, Rand ≈ 1.0; the faster choice in high-D where KD-tree pruning degrades). | exact HDBSCAN\* scale | [**#66**](https://github.com/J-D-3/density-clustering/issues/66) · **1.0.0** |
-| **C** | **Auto-dispatch front-end** — pick the engine from `n`/`d` so users never land on the wrong side of a crossover. **First slice landed:** `MstAlgorithm::Auto` selects the HDBSCAN\* MST backbone by (n, dim) from the [crossover sweep](#hdbscan-mst-backbone-auto-selection-72) below. **Remaining:** the OPTICS-side D1–D5 routing (exact-vs-s, Precompute-vs-OnDemand, structured projections). | usability / never-wrong-default | [**#72**](https://github.com/J-D-3/density-clustering/issues/72) · **1.0.0** |
+| **C** | **Auto-dispatch front-end** — pick the engine from `n`/`d`/density so users never land on the wrong side of a crossover. **Landed:** `MstAlgorithm::Auto` (HDBSCAN\* MST backbone, [sweep](#hdbscan-mst-backbone-auto-selection-72)) and `NeighborMode::Auto` + `CoreDistMode::Auto` (OPTICS acquisition, [sweep](#optics-acquisition-auto-selection-72)). **By design, not auto:** OPTICS↔sOPTICS stays explicit (it is a *metric* change — cosine/approximate — not just an engine swap), and backend-by-dimension is a compile-time template choice. | usability / never-wrong-default | [**#72**](https://github.com/J-D-3/density-clustering/issues/72) · **1.0.0** |
 | B | **Adaptive `D` / recall early-exit** for sOPTICS — scale `n_projections` with `n`/`d` and stop once recall stabilizes, shrinking the fixed tax and moving the crossover left. | sOPTICS small-n cost | backlog |
 | D | **Auto-select structured (FHT) projections** past a dimension threshold (already opt-in, 1.2–1.4× at ≥ 64-D; folds into C). | sOPTICS high-d cost | backlog |
 | E | **Share CEOs work** between sOPTICS and sHDBSCAN when both run on the same cloud. | redundant projection | backlog |
@@ -187,6 +187,39 @@ with exact Borůvka):
 Auto is **opt-in** — the default stays `DensePrim` (exact, unchanged behaviour). Pass an explicit
 backbone to override, e.g. `MstAlgorithm::Boruvka` to force exact in high dimension. The thresholds are
 heuristics tuned for the multi-core default and the boundaries are soft; an explicit choice always wins.
+
+## OPTICS acquisition auto-selection (#72)
+
+OPTICS has two **metric-preserving** acquisition knobs that only affect speed/memory, never the
+ordering: `NeighborMode` (Precompute vs OnDemand — when to materialise the neighbor cache) and
+`CoreDistMode` (Scan vs Knn — how to compute the core distance). `compute_reachability_dists(...,
+NeighborMode::Auto, ..., CoreDistMode::Auto)` picks both from a one-time density probe (sample ~64
+neighborhoods → average size). Because both are byte-identical to the explicit modes, Auto is risk-free
+for correctness — only the runtime changes.
+
+> **Note — sOPTICS is *not* part of this.** Routing exact OPTICS to the scalable sOPTICS is a *metric*
+> change (Euclidean → cosine, or an approximate kernel embedding of L2/L1), so it stays an explicit
+> opt-in. Auto only tunes the within-exact-OPTICS knobs.
+
+The thresholds are measured (`optics_acq_sweep`, 4 threads, sweeping ε to vary the average
+neighborhood). The crossovers are **dimension × density**:
+
+| regime | example (n=20k) | fastest |
+|--------|-----------------|---------|
+| low-D (≤ 8), dense (avg-nbrs > ~1000) | 3-D, avg-nbrs 2000 | **OnDemand + Knn** (3-D: 442 ms vs Precompute+Scan 2370 ms) |
+| low-D, sparse | 3-D, avg-nbrs 50–600 | **Precompute + Scan** (parallel cache wins) |
+| high-D (≥ 16), any density | 16-D, avg-nbrs 1500 | **Precompute + Scan** (search-bound; Knn's extra k-NN query is up to 4× *slower*) |
+| cache exceeds budget | large-n / dense | **OnDemand** (memory-safety override) |
+
+Policy (`detail::resolve_auto_acquisition`): a cloud is *low-D dense* when `Dim ≤ 8` **and**
+`avg-nbrs > 1000` → **OnDemand + Knn**; otherwise **Precompute + Scan**, except OnDemand whenever the
+estimated `O(n·avg-nbrs)` cache exceeds the budget (default 1 GiB; the `max_precompute_bytes` argument
+overrides it). The lesson the sweep taught: a pure cache-fit rule is **wrong** — on low-D dense clouds
+Precompute is 3–10× *slower* than OnDemand *well below* the memory wall (the huge-neighborhood cache is
+a memory-traffic loss), so density, not just the memory budget, drives the choice.
+
+Auto is **opt-in** (defaults stay `OnDemand` + `Scan`). Soft, multi-core-tuned heuristics; an explicit
+mode always wins.
 
 ## See also
 
