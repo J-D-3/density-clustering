@@ -28,7 +28,11 @@ jobs:
             preset: linux-clang
             werror: "OFF"
           - name: Windows MSVC
-            os: windows-latest
+            # Pinned: the `msvc` preset uses the "Visual Studio 17 2022" generator (matching the
+            # documented MSVC 2022 toolchain), which the windows-latest image no longer provides
+            # since it moved to VS2026 -- cmake then fails at project(). windows-2022 keeps CI and
+            # local dev on the same generator. Bump the preset + this image together when moving to VS2026.
+            os: windows-2022
             preset: msvc
             werror: "ON"
     steps:
@@ -84,7 +88,10 @@ jobs:
         run: cmake --build build-py
 
       - name: Smoke test
-        run: python python/test_optics_py.py build-py/python
+        # The in-tree build drops _optics.*.so under build-py/python; the native smoke test imports
+        # it from that dir (argv[1]). (Was python/test_optics_py.py, moved to python/tests/ in the
+        # test reorg.)
+        run: python python/tests/test_native.py build-py/python
 
   sanitizers:
     name: Linux Clang ASan+UBSan
