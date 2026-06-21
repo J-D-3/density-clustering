@@ -133,6 +133,25 @@ jobs:
       - name: Test
         run: ctest --preset linux-gcc
 
+  hnsw-backend-msvc:
+    name: Windows MSVC + HNSW backend (/WX)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      # Guards #71: with the HNSW backend on, the test instantiates vendored hnswlib templates whose
+      # MSVC codegen warnings (C4701/C4703) are errors under /WX. The default MSVC matrix job does NOT
+      # enable HNSW, so a Windows /WX + HNSW build break (as in #71) would otherwise stay latent. The
+      # Linux HNSW job above does not catch it (GCC doesn't promote C4701).
+      - name: Configure (HNSW backend enabled, warnings-as-errors)
+        run: cmake --preset msvc -DOPTICS_ENABLE_HNSW=ON -DOPTICS_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build --preset msvc
+
+      - name: Test
+        run: ctest --preset msvc
+
   perf-gate:
     name: Perf regression gate (back-to-back)
     runs-on: ubuntu-latest

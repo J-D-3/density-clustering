@@ -148,7 +148,7 @@ Where the headroom is, roughly by payoff. Tracked items link to their issue.
 
 | | Idea | Targets | Status |
 |---|------|---------|--------|
-| **A** | **Exact sub-quadratic MST** for HDBSCAN\* — lifts the `n ≈ 1e4` dense-Prim wall without touching the cosine approximation. **Both landed:** `MstAlgorithm::Boruvka` (EXACT — same total MST weight as dense Prim — via Borůvka over a component-aware KD-tree; ~30× faster at n = 60k in low-D) and `MstAlgorithm::KnnGraph` (near-exact, Rand ≈ 1.0; the faster choice in high-D where KD-tree pruning degrades). | exact HDBSCAN\* scale | [**#66**](https://github.com/J-D-3/density-clustering/issues/66) · **1.0.0** |
+| **A** | **Exact sub-quadratic MST** for HDBSCAN\* — lifts the `n ≈ 1e4` dense-Prim wall without touching the cosine approximation. **Both landed:** `MstAlgorithm::Boruvka` (EXACT — same total MST weight as dense Prim — via Borůvka over a component-aware KD-tree; ~30× faster at n = 60k in low-D) and `MstAlgorithm::KnnGraph` (near-exact, Rand ≈ 1.0; the faster choice in high-D where KD-tree pruning degrades). **Refinements (#73/#75, see [MST backbone refinements](#hdbscan-mst-backbone-refinements-73-75)):** a round-adaptive dual-tree makes exact Borůvka ~1.1–1.5× faster in low dim, and an approximate-k-NN (HNSW) source for `KnnGraph` extends the high-d / very-large-n reach. | exact HDBSCAN\* scale | [**#66**](https://github.com/J-D-3/density-clustering/issues/66) · **1.0.0** |
 | **C** | **Auto-dispatch front-end** — pick the engine from `n`/`d`/density so users never land on the wrong side of a crossover. **Landed:** `MstAlgorithm::Auto` (HDBSCAN\* MST backbone, [sweep](#hdbscan-mst-backbone-auto-selection-72)) and `NeighborMode::Auto` + `CoreDistMode::Auto` (OPTICS acquisition, [sweep](#optics-acquisition-auto-selection-72)). **By design, not auto:** OPTICS↔sOPTICS stays explicit (it is a *metric* change — cosine/approximate — not just an engine swap), and backend-by-dimension is a compile-time template choice. | usability / never-wrong-default | [**#72**](https://github.com/J-D-3/density-clustering/issues/72) · **1.0.0** |
 | B | **Adaptive `D` / recall early-exit** for sOPTICS — scale `n_projections` with `n`/`d` and stop once recall stabilizes, shrinking the fixed tax and moving the crossover left. | sOPTICS small-n cost | backlog |
 | D | **Auto-select structured (FHT) projections** past a dimension threshold (already opt-in, 1.2–1.4× at ≥ 64-D; folds into C). | sOPTICS high-d cost | backlog |
@@ -187,6 +187,62 @@ with exact Borůvka):
 Auto is **opt-in** — the default stays `DensePrim` (exact, unchanged behaviour). Pass an explicit
 backbone to override, e.g. `MstAlgorithm::Boruvka` to force exact in high dimension. The thresholds are
 heuristics tuned for the multi-core default and the boundaries are soft; an explicit choice always wins.
+
+## HDBSCAN\* MST backbone refinements (#73, #75)
+
+Two refinements to the backbones above, each **measured against the shipped implementation** with its
+own probe. Both are exact-or-equivalent — they change *speed*, not the clustering. Neither requires
+re-running the [1.0.0 reference matrix](benchmarking.md#100-reference-benchmark-matrix--results): they
+are *sub-backbone* changes (how a given MST is built), not changes to the library's data-dependent
+defaults, and exactness is preserved (see [the matrix-scope note](benchmarking.md#d5-follow-up--the-hdbscan-mst-backbone-crossover-66--72)).
+
+### Round-adaptive dual-tree Borůvka (#75) — low-dimension exact speedup
+
+Per-round profiling (`-DOPTICS_BORUVKA_PROFILE`) showed the **late** Borůvka rounds (few, large
+components) dominate the runtime — and those rounds have mostly-**pure** query leaves. So
+`exact_mutual_reachability_mst` now switches to a **leaf-batched dual-tree** (`boruvka_dual_search`:
+one descent per pure query leaf, pruned by box-vs-box distance) once `num_components ≤ n/(2·leaf_size)`;
+early rounds (all-mixed leaves, where a blanket dual-tree prunes badly and was previously reverted)
+stay on per-point search. The dual-tree is **exact** — identical total MST weight.
+
+Its box-vs-box bound loosens with dimension, so it is **hard-gated to `Dim ≤ 6`** (`kBoruvkaDualMaxDim`)
+at compile time — never taken above that regardless of the threshold, so `Auto` and explicit callers
+cannot hit the high-dim regression. Measured (`optics_hdbscan_boruvka_dual_probe`, 4 threads, blobs;
+`weight_rel_diff = 0` ⇒ exact in every cell):
+
+| dim | 2 | 3 | 4 | 5 | 6 | 8 (gated off) | 16 (gated off) |
+|----:|----:|----:|----:|----:|----:|----:|----:|
+| speedup vs per-point | 1.1–1.3× | **1.4–1.5×** | 1.05× | 1.2–1.3× | 1.2–1.3× | ~1.0 | ~1.0 |
+
+(The 8-D / 16-D columns are where the *ungated* dual-tree measured 0.87× / 0.25–0.40× — hence the gate.)
+This speeds the **default exact low-dim HDBSCAN\*** path, exactly where `Auto` already picks Borůvka.
+
+### Approximate-k-NN (HNSW) source for `KnnGraph` (#73) — high-d / very-large-n reach
+
+`KnnGraph` builds the MST from each point's k-NN graph; the source is a backend template argument.
+Adding `knn_graph()` to `HnswBackend` lets it feed that backbone from the **approximate HNSW graph**
+instead of the exact KD-tree — HNSW's query cost is ~dimension-independent, so it overtakes the exact
+KD-tree in the high-d / very-large-n corner where the KD-tree degrades. It needs `OPTICS_ENABLE_HNSW`
+and is selected by **type**, not by `Auto` (the backend is a compile-time choice):
+
+```cpp
+optics::hdbscan<double, Dim, optics::HnswBackend<double, Dim>>( pts, mcs, /*…*/, optics::MstAlgorithm::KnnGraph );
+```
+
+Measured (`optics_hdbscan_hnsw_mst_probe` / `…_tune_probe`, 4 threads, blobs; **Rand = 1.0 vs exact in
+every cell** — identical clustering). HNSW is index-build-bound, so it loses at small/mid n and only
+crosses over at large n / high dim:
+
+| n | dim | exact KD-tree | HNSW (default 16/200) | HNSW (`FastHnswBackend` 8/48) |
+|--:|--:|--:|--:|--:|
+| 96k | 32 | 1.0× | 0.57× | **1.99×** |
+| 96k | 64 | 1.0× | 1.16× | **3.36×** |
+| 192k | 64 | 1.0× | 3.54× | — |
+
+Because clustering needs only enough recall to recover the MST (not high-recall ANN), the cheaper
+**`FastHnswBackend`** preset (`HnswBackend<T,Dim,8,48,0>`) keeps Rand = 1.0 while running 2.9–3.5×
+faster than the default HNSW index, moving the exact-vs-HNSW crossover left. Use the exact backbones
+below that crossover; reach for the HNSW source only in the genuinely high-d, very-large-n regime.
 
 ## OPTICS acquisition auto-selection (#72)
 

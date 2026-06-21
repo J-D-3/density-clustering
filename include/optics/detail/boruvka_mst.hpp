@@ -44,6 +44,14 @@
 #include <numeric>
 #include <vector>
 
+// Opt-in per-round profiling (build any consumer with -DOPTICS_BORUVKA_PROFILE / /DOPTICS_BORUVKA_PROFILE):
+// prints each round's component count and parallel-search time to stderr, so the per-round cost
+// distribution is visible (e.g. whether early or late rounds dominate). Zero overhead when undefined.
+#ifdef OPTICS_BORUVKA_PROFILE
+#include <chrono>
+#include <cstdio>
+#endif
+
 namespace optics {
 namespace detail {
 
@@ -89,6 +97,23 @@ public:
 	int root() const { return root_; }
 	const std::vector<Node>& nodes() const { return nodes_; }
 	const std::vector<std::size_t>& order() const { return order_; }
+	const std::vector<int>& leaves() const { return leaves_; }  // leaf node ids (query side of the dual-tree)
+
+	// Squared distance between the bounding boxes of nodes a and b (0 if they overlap); the lower bound
+	// on the Euclidean distance between ANY point under a and ANY point under b. Used by the dual-tree
+	// search to prune a whole query-leaf-vs-target-node pair at once.
+	double box_box_min_dist_sq( int a, int b ) const {
+		const Node& na = nodes_[static_cast<std::size_t>( a )];
+		const Node& nb = nodes_[static_cast<std::size_t>( b )];
+		double s = 0.0;
+		for ( std::size_t d = 0; d < Dim; ++d ) {
+			const double alo = static_cast<double>( na.lo[d] ), ahi = static_cast<double>( na.hi[d] );
+			const double blo = static_cast<double>( nb.lo[d] ), bhi = static_cast<double>( nb.hi[d] );
+			const double gap = ( ahi < blo ) ? ( blo - ahi ) : ( ( bhi < alo ) ? ( alo - bhi ) : 0.0 );
+			s += gap * gap;
+		}
+		return s;
+	}
 
 	// Fill each node's min_core bottom-up (call once, after core distances are known).
 	void set_core( const std::vector<double>& core ) {
@@ -136,6 +161,7 @@ private:
 
 		if ( count <= leaf_size ) {
 			nodes_[static_cast<std::size_t>( id )] = nd;  // leaf
+			leaves_.push_back( id );                      // remember leaves for the dual-tree query pass
 			return id;
 		}
 
@@ -188,6 +214,7 @@ private:
 	const std::vector<std::array<T, Dim>>* pts_;
 	std::vector<std::size_t> order_;
 	std::vector<Node> nodes_;
+	std::vector<int> leaves_;
 	int root_ = -1;
 };
 
@@ -238,6 +265,54 @@ void boruvka_search( const BoruvkaKdTree<T, Dim>& tree, int id,
 }
 
 
+// Leaf-batched DUAL-TREE search: improve component cq's cheapest cross-component edge using a whole
+// PURE query leaf (qleaf, all its points in cq) at once, recursing it against the target tree. This is
+// the late-round counterpart to the per-point boruvka_search: when components are few and large, query
+// leaves are mostly pure, so one descent amortises across all the leaf's points and the box-vs-box
+// bound prunes whole target subtrees that no point in the leaf could beat. (Early rounds are the
+// opposite -- almost every leaf is mixed -- which is why the original blanket dual-tree was reverted;
+// here it is gated to late rounds by num_components, see exact_mutual_reachability_mst.)
+template <class T, std::size_t Dim>
+void boruvka_dual_search( const BoruvkaKdTree<T, Dim>& tree, int target_id, int qleaf,
+						  const std::vector<std::array<T, Dim>>& pts, const std::vector<double>& core,
+						  std::size_t cq, const std::vector<std::size_t>& point_comp,
+						  double& best_w, std::size_t& best_u, std::size_t& best_v ) {
+	const auto& tn = tree.nodes()[static_cast<std::size_t>( target_id )];
+	if ( tn.comp == cq ) { return; }  // whole target subtree is the query leaf's own component
+
+	const auto& qn = tree.nodes()[static_cast<std::size_t>( qleaf )];
+	// Lower bound on mutual reachability between ANY point in the query leaf and ANY under the target:
+	//   max( min_core(query leaf), min_core(target), boxdist(qbox, tbox) ) <= max(core(q),core(t),d).
+	const double bd = std::sqrt( tree.box_box_min_dist_sq( qleaf, target_id ) );
+	const double lb = std::max( std::max( qn.min_core, tn.min_core ), bd );
+	if ( lb >= best_w ) { return; }  // no pair across these boxes can beat the component's current best
+
+	if ( tn.is_leaf() ) {
+		const auto& order = tree.order();
+		for ( std::size_t i = qn.start; i < qn.start + qn.count; ++i ) {
+			const std::size_t q = order[i];
+			for ( std::size_t j = tn.start; j < tn.start + tn.count; ++j ) {
+				const std::size_t t = order[j];
+				if ( point_comp[t] == cq ) { continue; }  // same component (includes the leaf's own points)
+				const double d = std::sqrt( square_dist( pts[q], pts[t] ) );
+				const double w = std::max( core[q], std::max( core[t], d ) );
+				if ( w < best_w ) { best_w = w; best_u = q; best_v = t; }
+			}
+		}
+		return;
+	}
+
+	// Descend the nearer target child first (by box-vs-box distance to the query leaf) so the bound
+	// tightens before the farther child is considered.
+	const double dl = tree.box_box_min_dist_sq( tn.left, qleaf );
+	const double dr = tree.box_box_min_dist_sq( tn.right, qleaf );
+	const int first = ( dl <= dr ) ? tn.left : tn.right;
+	const int second = ( dl <= dr ) ? tn.right : tn.left;
+	boruvka_dual_search( tree, first, qleaf, pts, core, cq, point_comp, best_w, best_u, best_v );
+	boruvka_dual_search( tree, second, qleaf, pts, core, cq, point_comp, best_w, best_u, best_v );
+}
+
+
 // Exact mutual-reachability MST via Boruvka over the component-aware KD-tree. Produces the same tree
 // (identical total weight) as dense Prim, sub-quadratically. The complete mutual-reachability graph is
 // always connected, so this terminates with exactly n-1 edges -- no connectivity fix-up (unlike the
@@ -253,16 +328,44 @@ void boruvka_search( const BoruvkaKdTree<T, Dim>& tree, int id,
 // n_threads; under mutual-reachability ties (equal-weight cross-edges, e.g. on core-distance plateaus)
 // the specific edge chosen can vary with thread count, but the MST total weight is invariant (still
 // exact). Core distances were computed in parallel upstream.
+//
+// ROUND-ADAPTIVE traversal (issue #75): the per-round profile shows the LATE rounds (few, large
+// components) dominate the cost -- there per-point search is expensive because each of a big
+// component's points independently scans for its cheapest cross-component edge. Those rounds also have
+// mostly-PURE query leaves, so a leaf-batched dual-tree (boruvka_dual_search) amortises one descent
+// across a whole leaf and prunes by box-vs-box. We therefore switch to the dual-tree once
+// num_components <= `dual_max_components`; early rounds (many tiny, mixed components -- where the
+// blanket dual-tree was reverted as slower) stay on per-point search. The switch is exact either way
+// (same total MST weight). `dual_max_components`: 0 disables the dual path entirely (pure per-point,
+// the pre-#75 behaviour); the sentinel `kBoruvkaAutoDual` (default) auto-picks n / (2*leaf_size) --
+// roughly "the average component spans >= 2 leaves, so leaves are mostly pure".
+//
+// DIMENSION GATE: the dual-tree's box-vs-box bound loosens with dimension (curse of dimensionality), so
+// it only prunes -- and only pays off -- in LOW dimension. Measured (optics_hdbscan_boruvka_dual_probe,
+// 4 threads, blobs): ~1.1-1.5x at 2-6 D, but 0.87x at 8 D and 0.25-0.40x at 16 D. The dual path is
+// therefore hard-gated to Dim <= kBoruvkaDualMaxDim at compile time and is NEVER taken above it,
+// regardless of dual_max_components -- so Auto (#72 picks Boruvka up to 12 D) and any explicit caller
+// stay safe from the high-dim regression. Per-point search remains the universal exact path.
+inline constexpr std::size_t kBoruvkaAutoDual = std::numeric_limits<std::size_t>::max();
+inline constexpr std::size_t kBoruvkaDualMaxDim = 6;
+
 template <class T, std::size_t Dim>
 std::vector<BoruvkaEdge> exact_mutual_reachability_mst( const std::vector<std::array<T, Dim>>& points,
 														const std::vector<double>& core,
-														unsigned n_threads = 0, std::size_t leaf_size = 16 ) {
+														unsigned n_threads = 0, std::size_t leaf_size = 16,
+														std::size_t dual_max_components = kBoruvkaAutoDual ) {
 	const std::size_t n = points.size();
 	std::vector<BoruvkaEdge> mst;
 	if ( n < 2 ) { return mst; }
 
 	BoruvkaKdTree<T, Dim> tree( points, leaf_size );
 	tree.set_core( core );
+
+	// Resolve the auto sentinel to the heuristic threshold (mostly-pure leaves => dual-tree pays off).
+	// [[maybe_unused]]: only read inside the Dim <= kBoruvkaDualMaxDim branch below.
+	[[maybe_unused]] const std::size_t dual_threshold = ( dual_max_components == kBoruvkaAutoDual )
+		? n / ( 2 * std::max<std::size_t>( 1, leaf_size ) )
+		: dual_max_components;
 
 	// Union-find (path-halving + union by size) over the points; roots are the component ids.
 	std::vector<std::size_t> uf( n ), sz( n, 1 );
@@ -287,16 +390,57 @@ std::vector<BoruvkaEdge> exact_mutual_reachability_mst( const std::vector<std::a
 
 	mst.reserve( n - 1 );
 	std::size_t num_components = n;
+#ifdef OPTICS_BORUVKA_PROFILE
+	std::size_t profile_round = 0;
+#endif
 	while ( num_components > 1 ) {
 		for ( std::size_t i = 0; i < n; ++i ) { point_comp[i] = find( i ); }
 		tree.refresh_components( point_comp );
 
-		// Parallel over workers: each owns query points [w*pblock, (w+1)*pblock) and its own workspace.
+#ifdef OPTICS_BORUVKA_PROFILE
+		const std::size_t profile_comps = num_components;
+		const auto profile_t0 = std::chrono::steady_clock::now();
+#endif
+		// Late rounds (few large components => mostly-pure query leaves) use the leaf-batched dual-tree;
+		// early rounds use per-point. Both are exact; the choice is purely about which traversal prunes
+		// better at this component count. Hard-gated to low Dim (see kBoruvkaDualMaxDim): the box-vs-box
+		// bound is useless in high dimension, so above the gate we always use per-point.
+		bool use_dual = false;
+		if constexpr ( Dim <= kBoruvkaDualMaxDim ) {
+			use_dual = ( num_components <= dual_threshold );
+		}
+
+		// Parallel over workers: each owns a contiguous block (query points in the per-point path, query
+		// leaves in the dual path) and its OWN per-component bests, merged afterwards.
 		detail::parallel_for( n_threads, n_workers, [&]( std::size_t w ) {
 			auto& cbw = wbest_w[w];
 			auto& cbu = wbest_u[w];
 			auto& cbv = wbest_v[w];
 			std::fill( cbw.begin(), cbw.end(), INF );  // reset this worker's bests for the round
+			if ( use_dual ) {
+				const auto& leaves = tree.leaves();
+				const auto& order = tree.order();
+				const std::size_t n_leaves = leaves.size();
+				const std::size_t lblock = ( n_leaves + n_workers - 1 ) / n_workers;
+				const std::size_t lo = w * lblock;
+				const std::size_t hi = std::min( n_leaves, lo + lblock );
+				for ( std::size_t li = lo; li < hi; ++li ) {
+					const int qleaf = leaves[li];
+					const auto& qn = tree.nodes()[static_cast<std::size_t>( qleaf )];
+					if ( qn.comp != BoruvkaKdTree<T, Dim>::MIXED ) {
+						const std::size_t cq = qn.comp;  // pure leaf: one batched descent for the whole leaf
+						boruvka_dual_search( tree, tree.root(), qleaf, points, core, cq, point_comp,
+											 cbw[cq], cbu[cq], cbv[cq] );
+					} else {
+						for ( std::size_t i = qn.start; i < qn.start + qn.count; ++i ) {
+							const std::size_t q = order[i];  // mixed boundary leaf: fall back to per-point
+							const std::size_t c = point_comp[q];
+							boruvka_search( tree, tree.root(), points, core, q, c, point_comp, cbw[c], cbu[c], cbv[c] );
+						}
+					}
+				}
+				return;
+			}
 			const std::size_t lo = w * pblock;
 			const std::size_t hi = std::min( n, lo + pblock );
 			for ( std::size_t q = lo; q < hi; ++q ) {
@@ -305,6 +449,14 @@ std::vector<BoruvkaEdge> exact_mutual_reachability_mst( const std::vector<std::a
 			}
 		} );
 
+#ifdef OPTICS_BORUVKA_PROFILE
+		{
+			const auto profile_t1 = std::chrono::steady_clock::now();
+			const double ms = std::chrono::duration<double, std::milli>( profile_t1 - profile_t0 ).count();
+			std::fprintf( stderr, "[boruvka] round=%zu comps=%zu search_ms=%.3f\n", profile_round, profile_comps, ms );
+			++profile_round;
+		}
+#endif
 		// Merge the workers' per-component bests (min weight; ties resolved by worker order).
 		std::fill( comp_best_w.begin(), comp_best_w.end(), INF );
 		for ( unsigned w = 0; w < n_workers; ++w ) {

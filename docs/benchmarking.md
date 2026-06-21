@@ -118,6 +118,19 @@ speed, not cross-library quality.
 [`algorithms.md` § MST-backbone auto-selection](algorithms.md#hdbscan-mst-backbone-auto-selection-72);
 caveats: thresholds are multi-core-tuned heuristics with soft boundaries (12-D is a genuine tie).
 
+**Backbone refinements since (#73 / #75) — does the matrix need re-running? No.** Two further backbone
+changes have landed (full write-up + measured tables in
+[`algorithms.md` § MST backbone refinements](algorithms.md#hdbscan-mst-backbone-refinements-73-75)): a
+**round-adaptive dual-tree** that makes exact Borůvka ~1.1–1.5× faster at `Dim ≤ 6` (hard-gated above
+that), and an **approximate-k-NN (HNSW) source** for `KnnGraph` that extends the high-d / very-large-n
+reach. Both are *sub-backbone* refinements — they change how a given MST is built, not the library's
+data-dependent defaults — and both are **exact-or-equivalent** (dual-tree: identical MST weight;
+HNSW-`KnnGraph`: Rand = 1.0 vs exact). So the D1–D5 decisions and the reference matrix are **unaffected
+and need no re-run**. Two smaller consequences for *this* section: (1) the sweep table above predates
+#75, so its low-dim Borůvka cells are now conservative (Borůvka's lead at ≤ 6-D widened — which only
+*reinforces* the `dim < 16 ⇒ Borůvka` policy; no threshold moved); (2) the HNSW-`KnnGraph` source is a
+compile-time backend choice, *not* an `Auto` option, so it stays out of the selector by design.
+
 ### D1/D3 follow-up — the OPTICS acquisition crossover (#72)
 
 The OPTICS-side auto-dispatch (`NeighborMode::Auto` + `CoreDistMode::Auto`) tunes the two

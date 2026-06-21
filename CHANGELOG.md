@@ -19,6 +19,19 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
   the `NanoflannBackend::knn_graph` capability + `detail/boruvka_mst.hpp`; the condense/stability/label
   tail is reused verbatim. See `docs/algorithms.md`. (A leaf-batched dual-tree variant was tried and
   reverted — documented in-header; remaining refinements tracked in #73–#77.)
+- **HDBSCAN\* MST backbone refinements** (#73, #75): two measured, exact-or-equivalent speedups to the
+  backbones above. **Round-adaptive dual-tree Borůvka** (#75) switches the late Borůvka rounds (few
+  large components, mostly-pure query leaves) to a leaf-batched dual-tree while early rounds stay
+  per-point — **exact** (identical MST weight), ~1.1–1.5× faster at `Dim ≤ 6` and hard-gated above that
+  (the box-vs-box bound is useless in high dim), so `Auto` and explicit callers can't regress.
+  **Approximate-k-NN (HNSW) source for `KnnGraph`** (#73): `HnswBackend` gained `knn_graph()`, so
+  `hdbscan<…, HnswBackend<…>>(…, KnnGraph)` builds the MST from the approximate HNSW graph — Rand = 1.0
+  vs exact, and faster in the high-d / very-large-n corner where the exact KD-tree degrades (e.g. 3.5×
+  at n = 192k, 64-D). The cheaper `FastHnswBackend` preset moves that crossover left (2.9–3.5× over the
+  default HNSW index at no quality cost). Selected by backend *type* (needs `OPTICS_ENABLE_HNSW`), not
+  by `Auto`. The reference benchmark matrix is unaffected (sub-backbone, exactness preserved). See
+  `docs/algorithms.md` § MST backbone refinements. (#74, FAMST-style fix-up refinement, was investigated
+  and closed — the fix-up is not the bottleneck.)
 - **Auto acquisition selection for OPTICS** (#72): `compute_reachability_dists` accepts
   `NeighborMode::Auto` and `CoreDistMode::Auto`, which pick the metric-preserving acquisition knobs
   (Precompute-vs-OnDemand, Scan-vs-Knn) from a one-time density probe. Both are **byte-identical** to

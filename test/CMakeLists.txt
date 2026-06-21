@@ -20,6 +20,14 @@ add_executable(optics_tests test_main.cpp)
 target_link_libraries(optics_tests PRIVATE optics::optics)
 target_include_directories(optics_tests SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 target_compile_options(optics_tests PRIVATE ${OPTICS_WARN_OPTIONS})
+# #71: with the optional HNSW backend on, the test instantiates vendored hnswlib templates whose
+# codegen warnings (C4701/C4703 in hnswalg.h) MSVC attributes to this TU -- outside the
+# `#pragma warning(push, 0)` in hnsw_backend.hpp, and an in-source pragma cannot cover the
+# instantiation either. Suppress just those two for this TU (MSVC + HNSW only); never touch the
+# vendored headers. Without HNSW the test does not include hnswlib, so the suppression stays off.
+if(OPTICS_ENABLE_HNSW AND MSVC)
+    target_compile_options(optics_tests PRIVATE /wd4701 /wd4703)
+endif()
 add_test(NAME optics_tests COMMAND optics_tests)
 
 # Visual / export test: clusters synthetic clouds, asserts structure, and emits
@@ -120,9 +128,29 @@ add_executable(optics_acq_sweep Benchmark/acq_sweep.cpp)
 target_link_libraries(optics_acq_sweep PRIVATE optics::optics)
 target_include_directories(optics_acq_sweep PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Benchmark")
 
+# Connectivity fix-up diagnostic (#74): sweep graph_k down, measure rand vs exact. Release; not a ctest.
+add_executable(optics_hdbscan_fixup_probe Benchmark/hdbscan_fixup_probe.cpp)
+target_link_libraries(optics_hdbscan_fixup_probe PRIVATE optics::optics)
+target_include_directories(optics_hdbscan_fixup_probe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Benchmark")
+
+# Round-adaptive dual-tree Boruvka (#75): per-point vs round-adaptive MST timing + exactness. Release.
+add_executable(optics_hdbscan_boruvka_dual_probe Benchmark/hdbscan_boruvka_dual_probe.cpp)
+target_link_libraries(optics_hdbscan_boruvka_dual_probe PRIVATE optics::optics)
+target_include_directories(optics_hdbscan_boruvka_dual_probe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Benchmark")
+
 # HNSW recall-vs-speed probe (#47): HNSW vs exact / eps-approx nanoflann in high-D. Only
 # built with the optional HNSW backend enabled. Release config; not a ctest.
 if(OPTICS_ENABLE_HNSW)
     add_executable(optics_hnsw_probe Benchmark/hnsw_probe.cpp)
     target_link_libraries(optics_hnsw_probe PRIVATE optics::optics)
+
+    # HDBSCAN* k-NN-graph MST: exact nanoflann vs approximate HNSW k-NN (#73). Release; not a ctest.
+    add_executable(optics_hdbscan_hnsw_mst_probe Benchmark/hdbscan_hnsw_mst_probe.cpp)
+    target_link_libraries(optics_hdbscan_hnsw_mst_probe PRIVATE optics::optics)
+    target_include_directories(optics_hdbscan_hnsw_mst_probe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Benchmark")
+
+    # HDBSCAN* HNSW k-NN-graph MST build-parameter tuning (#73 follow-up). Release; not a ctest.
+    add_executable(optics_hdbscan_hnsw_tune_probe Benchmark/hdbscan_hnsw_tune_probe.cpp)
+    target_link_libraries(optics_hdbscan_hnsw_tune_probe PRIVATE optics::optics)
+    target_include_directories(optics_hdbscan_hnsw_tune_probe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Benchmark")
 endif()
