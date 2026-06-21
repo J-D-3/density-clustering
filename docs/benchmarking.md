@@ -96,6 +96,28 @@ nanoflann, OnDemand acquisition, the knee ε. Switch to sOPTICS / sHDBSCAN (cosi
 you are in the high-dimensional or very-large-n regime; switch to Precompute when your cloud is sparse
 enough that the neighbor cache fits in RAM.
 
+### D5 follow-up — the HDBSCAN\* MST backbone crossover (#66 / #72)
+
+D5 above measured only dense-Prim vs sHDBSCAN. The exact/near-exact **sub-quadratic** MST backbones
+added since (`MstAlgorithm::Boruvka`, exact; `MstAlgorithm::KnnGraph`, near-exact — #66) needed their
+own crossover study to drive the `MstAlgorithm::Auto` selector (#72). It is a focused **engine-selection
+timing sweep** (`optics_hdbscan_mst_probe sweep`: n×dim grid over the backbones, exact Borůvka as the
+agreement reference), deliberately *not* a full matrix axis — it measures our own backbones' relative
+speed, not cross-library quality.
+
+**Reference run (2026-06-21, same machine as above, 4 threads, well-separated blobs):**
+
+| | result | Auto policy |
+|---|--------|-------------|
+| dense-Prim | never fastest (`O(n²)`); ties only at n < ~1000 | `n < 1000` ⇒ **DensePrim** (simplest exact) |
+| Borůvka (exact) | fastest **≤ 12-D** (26%+ over KnnGraph at 8-D) | `dim < 16` ⇒ **Borůvka** |
+| KnnGraph (~exact) | fastest **≥ 16-D** (2.8× at 32-D; KD-tree pruning degrades with dim) | `dim ≥ 16` ⇒ **KnnGraph** (else Borůvka) |
+
+`knn_rand = 1.0` across the grid (no measured quality loss vs exact on these blobs). Auto is **opt-in**
+(default stays DensePrim). The full per-cell table and the policy rationale are in
+[`algorithms.md` § MST-backbone auto-selection](algorithms.md#hdbscan-mst-backbone-auto-selection-72);
+caveats: thresholds are multi-core-tuned heuristics with soft boundaries (12-D is a genuine tie).
+
 ## Engines compared
 
 | engine | how | status |

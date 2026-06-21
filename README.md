@@ -45,6 +45,8 @@ Two facts worth knowing up front, both explained in the secondary doc:
 
 → **Full comparison** — the two design seams, the cosine derivation, the small-`n` crossover, and the efficiency roadmap — in **[`docs/algorithms.md`](docs/algorithms.md)**.
 
+For background on HDBSCAN\* specifically, John Healy's talk **[*HDBSCAN, Fast Density Based Clustering, the How and the Why*](https://youtu.be/dGsxd67IFiU)** is an excellent visual introduction to mutual reachability, the condensed tree, and cluster stability.
+
 ## Quickstart: cluster your own data
 ### C++ integration
 This library is header-only. Simply add `include/` to your include path and add `#include <optics/optics.hpp>`.
