@@ -847,7 +847,7 @@ HdbscanResult hdbscan( const std::vector<std::array<T, Dim>>& points, std::size_
 		if ( mst_algo == MstAlgorithm::Boruvka ) {
 			// Exact Boruvka over the component-aware KD-tree: same tree as dense Prim, sub-quadratic.
 			// Its BoruvkaEdge has the same (u, v, weight) layout as MstEdge; copy across.
-			const auto bedges = detail::exact_mutual_reachability_mst( pts, core );
+			const auto bedges = detail::exact_mutual_reachability_mst( pts, core, n_threads );
 			std::vector<detail::MstEdge> mst;
 			mst.reserve( bedges.size() );
 			for ( const auto& e : bedges ) { mst.push_back( { e.u, e.v, e.weight } ); }

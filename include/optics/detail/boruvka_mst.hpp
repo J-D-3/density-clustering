@@ -19,14 +19,22 @@
 // box, the minimum core distance under it, and (refreshed each round) the component its points belong
 // to (or MIXED). The traversal is single-tree (each point searched against the tree) with two prunes
 // -- a node fully inside the query's own component is skipped, and a node whose best-possible
-// mutual-reachability lower bound cannot beat the component's current best is skipped. (A dual-tree
-// node-vs-node refinement and parallel rounds are further speed-ups, not needed for correctness.)
+// mutual-reachability lower bound cannot beat the component's current best is skipped.
+//
+// Each Boruvka round runs in PARALLEL: the query points are split into per-worker blocks, each worker
+// keeps a private per-component best (so writes are unshared and scheduling-independent), and the
+// blocks are merged afterwards -- exact at any thread count, deterministic for a fixed one (see
+// exact_mutual_reachability_mst). A leaf-batched DUAL-TREE variant (recurse a whole query leaf at
+// once) was implemented and benchmarked but REVERTED: a mixed-component query leaf must prune by its
+// loosest point's bound, and early rounds are almost all mixed, so it pruned worse than the per-point
+// search and ran slower. The per-component bound, not query batching, is what makes this fast.
 //
 // Ideas drawn from TutteInstitute/fast_hdbscan (component_aware_query_recursion / merge_components /
 // update_component_vectors) and the March/Ram/Gray "Fast EMST" dual-tree Boruvka; reimplemented from
 // the algorithm to stay MIT-clean.
 
-#include "math.hpp"  // detail::square_dist
+#include "math.hpp"         // detail::square_dist
+#include "thread_pool.hpp"  // detail::parallel_for (parallel rounds)
 
 #include <algorithm>
 #include <array>
@@ -106,6 +114,7 @@ public:
 		return s;
 	}
 
+
 private:
 	int build( std::size_t start, std::size_t count, std::size_t leaf_size ) {
 		const int id = static_cast<int>( nodes_.size() );
@@ -183,9 +192,16 @@ private:
 };
 
 
-// Recursive single-tree search: find, for query point q in component cq, the cheapest
-// mutual-reachability edge to a DIFFERENT component, tightening (best_w, best_u, best_v) -- the
-// component's current best, shared across its points so the bound tightens as the round proceeds.
+// Single-tree search: improve query point q's COMPONENT (cq) cheapest mutual-reachability edge to a
+// different component, by recursing q against the target tree. Pruning is by the per-component best
+// (best_w/best_u/best_v passed as the component's slot), which tightens as edges are found -- both
+// within q's search and across earlier points the same worker processed in component cq. These are the
+// WORKER's private component bests (each worker owns a contiguous block of query points, so its writes
+// are unshared); they are merged across workers afterwards.
+//
+// A leaf-batched dual-tree variant was tried (recurse a whole query leaf at once) but measured SLOWER:
+// a mixed-component leaf must prune by its loosest point's bound, and in early rounds almost every leaf
+// is mixed, so the per-point bound here prunes harder than the descent-amortisation saves.
 template <class T, std::size_t Dim>
 void boruvka_search( const BoruvkaKdTree<T, Dim>& tree, int id,
 					 const std::vector<std::array<T, Dim>>& pts, const std::vector<double>& core,
@@ -225,12 +241,22 @@ void boruvka_search( const BoruvkaKdTree<T, Dim>& tree, int id,
 // Exact mutual-reachability MST via Boruvka over the component-aware KD-tree. Produces the same tree
 // (identical total weight) as dense Prim, sub-quadratically. The complete mutual-reachability graph is
 // always connected, so this terminates with exactly n-1 edges -- no connectivity fix-up (unlike the
-// sparse k-NN / CEOs paths). The round loop is sequential (parallelising it is future work); the core
-// distances are computed in parallel upstream.
+// sparse k-NN / CEOs paths).
+//
+// Each round partitions the query POINTS into `n_workers` contiguous blocks (n_threads, 0 => hardware
+// concurrency) and runs them in PARALLEL: each worker keeps its OWN per-component bests, so its writes
+// are unshared (race-free) and -- because the point partition and per-worker processing order are
+// fixed -- independent of scheduling. The per-worker bests are then MERGED (min weight, ties by worker
+// then point index) into the round's per-component edges, which are added and unioned -- the standard
+// Boruvka step. Keeping the component bound per worker preserves the strong per-component pruning that
+// makes the search fast, while still parallelising. The result is deterministic for a fixed
+// n_threads; under mutual-reachability ties (equal-weight cross-edges, e.g. on core-distance plateaus)
+// the specific edge chosen can vary with thread count, but the MST total weight is invariant (still
+// exact). Core distances were computed in parallel upstream.
 template <class T, std::size_t Dim>
 std::vector<BoruvkaEdge> exact_mutual_reachability_mst( const std::vector<std::array<T, Dim>>& points,
 														const std::vector<double>& core,
-														std::size_t leaf_size = 16 ) {
+														unsigned n_threads = 0, std::size_t leaf_size = 16 ) {
 	const std::size_t n = points.size();
 	std::vector<BoruvkaEdge> mst;
 	if ( n < 2 ) { return mst; }
@@ -246,24 +272,46 @@ std::vector<BoruvkaEdge> exact_mutual_reachability_mst( const std::vector<std::a
 		return x;
 	};
 
+	// One private (component-best) workspace per worker; partition the query points into blocks.
+	const unsigned n_workers = std::max( 1u, std::min<unsigned>( detail::resolve_thread_count( n_threads ),
+		static_cast<unsigned>( n ) ) );
+	constexpr double INF = std::numeric_limits<double>::infinity();
+	std::vector<std::vector<double>> wbest_w( n_workers, std::vector<double>( n, INF ) );
+	std::vector<std::vector<std::size_t>> wbest_u( n_workers, std::vector<std::size_t>( n, 0 ) );
+	std::vector<std::vector<std::size_t>> wbest_v( n_workers, std::vector<std::size_t>( n, 0 ) );
+	const std::size_t pblock = ( n + n_workers - 1 ) / n_workers;
+
 	std::vector<std::size_t> point_comp( n );
 	std::vector<double> comp_best_w( n );
 	std::vector<std::size_t> comp_best_u( n ), comp_best_v( n );
-	constexpr double INF = std::numeric_limits<double>::infinity();
 
 	mst.reserve( n - 1 );
 	std::size_t num_components = n;
 	while ( num_components > 1 ) {
 		for ( std::size_t i = 0; i < n; ++i ) { point_comp[i] = find( i ); }
 		tree.refresh_components( point_comp );
-		std::fill( comp_best_w.begin(), comp_best_w.end(), INF );
 
-		// Each point finds its component's cheapest cross-edge; the shared per-component bound
-		// (comp_best_w[c]) tightens across points, so later points in a component prune more.
-		for ( std::size_t q = 0; q < n; ++q ) {
-			const std::size_t c = point_comp[q];
-			boruvka_search( tree, tree.root(), points, core, q, c, point_comp,
-							comp_best_w[c], comp_best_u[c], comp_best_v[c] );
+		// Parallel over workers: each owns query points [w*pblock, (w+1)*pblock) and its own workspace.
+		detail::parallel_for( n_threads, n_workers, [&]( std::size_t w ) {
+			auto& cbw = wbest_w[w];
+			auto& cbu = wbest_u[w];
+			auto& cbv = wbest_v[w];
+			std::fill( cbw.begin(), cbw.end(), INF );  // reset this worker's bests for the round
+			const std::size_t lo = w * pblock;
+			const std::size_t hi = std::min( n, lo + pblock );
+			for ( std::size_t q = lo; q < hi; ++q ) {
+				const std::size_t c = point_comp[q];
+				boruvka_search( tree, tree.root(), points, core, q, c, point_comp, cbw[c], cbu[c], cbv[c] );
+			}
+		} );
+
+		// Merge the workers' per-component bests (min weight; ties resolved by worker order).
+		std::fill( comp_best_w.begin(), comp_best_w.end(), INF );
+		for ( unsigned w = 0; w < n_workers; ++w ) {
+			const auto& cbw = wbest_w[w];
+			for ( std::size_t c = 0; c < n; ++c ) {
+				if ( cbw[c] < comp_best_w[c] ) { comp_best_w[c] = cbw[c]; comp_best_u[c] = wbest_u[w][c]; comp_best_v[c] = wbest_v[w][c]; }
+			}
 		}
 
 		// Add each component's best edge and union (a component is identified by its root index c).

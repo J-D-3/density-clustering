@@ -1862,14 +1862,18 @@ TEST_CASE("boruvka_mst: exact -- same total weight as dense Prim, n-1 edges (#66
 			optics::NanoflannBackend<double, Dim>>( pts, min_samples, 0 );
 
 		const auto dense = optics::detail::mutual_reachability_mst( pts, core );
-		const auto bor = optics::detail::exact_mutual_reachability_mst( pts, core );
+		const auto bor = optics::detail::exact_mutual_reachability_mst( pts, core, 1 );   // sequential
+		const auto bor4 = optics::detail::exact_mutual_reachability_mst( pts, core, 4 );  // parallel
 
 		REQUIRE( dense.size() == n - 1 );
-		REQUIRE( bor.size() == n - 1 );  // complete graph is connected => exactly n-1 edges, no fix-up
-		double sum_dense = 0.0, sum_bor = 0.0;
+		REQUIRE( bor.size() == n - 1 );   // complete graph is connected => exactly n-1 edges, no fix-up
+		REQUIRE( bor4.size() == n - 1 );
+		double sum_dense = 0.0, sum_bor = 0.0, sum_bor4 = 0.0;
 		for ( const auto& e : dense ) { sum_dense += e.weight; }
 		for ( const auto& e : bor ) { sum_bor += e.weight; }
+		for ( const auto& e : bor4 ) { sum_bor4 += e.weight; }
 		CHECK( sum_bor == doctest::Approx( sum_dense ).epsilon( 1e-9 ) );
+		CHECK( sum_bor4 == doctest::Approx( sum_dense ).epsilon( 1e-9 ) );  // exact at any thread count
 		// Every Boruvka edge is a real mutual-reachability weight (>= 0) between distinct points.
 		for ( const auto& e : bor ) { CHECK( e.u != e.v ); CHECK( e.weight >= 0.0 ); }
 	};
@@ -1899,10 +1903,16 @@ TEST_CASE("hdbscan: Boruvka MST gives the same clustering as dense Prim (#66 Pha
 													   false, 0, true, {}, optics::MstAlgorithm::Boruvka );
 		CHECK( bor.n_clusters == dense.n_clusters );
 		CHECK( rand_index( to_ll( bor.labels ), to_ll( dense.labels ) ) > 0.99 );
-		// Deterministic across runs.
+		// Deterministic across runs at the same thread count.
 		const auto again = optics::hdbscan<double, Dim>( pts, mcs, 0, optics::ClusterSelectionMethod::EOM,
 														 false, 0, true, {}, optics::MstAlgorithm::Boruvka );
 		CHECK( ( bor.labels == again.labels ) );
+		// Parallel rounds agree with sequential: same partition at 1 and 4 threads (exact either way).
+		const auto bor1 = optics::hdbscan<double, Dim>( pts, mcs, 0, optics::ClusterSelectionMethod::EOM,
+														false, 1, true, {}, optics::MstAlgorithm::Boruvka );
+		const auto bor4 = optics::hdbscan<double, Dim>( pts, mcs, 0, optics::ClusterSelectionMethod::EOM,
+														false, 4, true, {}, optics::MstAlgorithm::Boruvka );
+		CHECK( rand_index( to_ll( bor1.labels ), to_ll( bor4.labels ) ) > 0.99 );
 	};
 	run( optics::testdata::make_blobs<double, 2>( 4, 90, 40.0, 1.0, 123u ), 10 );
 	run( optics::testdata::make_blobs<double, 3>( 5, 120, 30.0, 1.0, 321u ), 15 );
