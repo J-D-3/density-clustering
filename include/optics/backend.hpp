@@ -29,7 +29,13 @@ namespace optics {
 //                them. Fastest, but memory grows with the total neighbor count.
 //   OnDemand   : query a point's neighbors when it is processed. Lean memory,
 //                sequential. Prefer for very large clouds (e.g. 1e7 points).
-enum class NeighborMode { Precompute, OnDemand };
+//   Auto       : pick Precompute or OnDemand from a one-time density probe (#72) --
+//                OnDemand for low-dimensional dense clouds (where caching huge
+//                neighborhoods is a memory-traffic loss) and whenever the estimated
+//                cache exceeds a budget; Precompute otherwise. Both modes yield the
+//                SAME ordering, so Auto only changes speed/memory, never the result.
+//                Opt-in; the default stays OnDemand. See compute_reachability_dists.
+enum class NeighborMode { Precompute, OnDemand, Auto };
 
 // How a point's core-distance is computed during the ordering pass.
 //   Scan : nth_element over the point's full epsilon-neighborhood (default;
@@ -39,7 +45,12 @@ enum class NeighborMode { Precompute, OnDemand };
 //          images, issue #24). Yields identical core-distances (hence identical
 //          orderings) to Scan. Requires the backend to model KnnCoreDist; for
 //          backends without that capability the ordering loop falls back to Scan.
-enum class CoreDistMode { Scan, Knn };
+//   Auto : pick Scan or Knn from the same density probe as NeighborMode::Auto (#72)
+//          -- Knn for low-dimensional dense clouds (where it beats scanning huge
+//          neighborhoods), Scan otherwise (in high dimension the extra k-NN query is
+//          slower than scanning). Byte-identical to Scan either way; opt-in (default
+//          Scan); downgrades to Scan for backends without KnnCoreDist.
+enum class CoreDistMode { Scan, Knn, Auto };
 
 // A neighbor-search backend ingests the point cloud once at construction (it may
 // convert to a native layout there) and answers radius queries without any

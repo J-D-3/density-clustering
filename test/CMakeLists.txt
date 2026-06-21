@@ -114,6 +114,12 @@ add_executable(optics_hdbscan_mst_probe Benchmark/hdbscan_mst_probe.cpp)
 target_link_libraries(optics_hdbscan_mst_probe PRIVATE optics::optics)
 target_include_directories(optics_hdbscan_mst_probe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Benchmark")
 
+# OPTICS acquisition-knob crossover sweep (#72): avg_nbrs -> fastest NeighborMode / CoreDistMode,
+# to ground the NeighborMode::Auto / CoreDistMode::Auto thresholds. Release; not a ctest.
+add_executable(optics_acq_sweep Benchmark/acq_sweep.cpp)
+target_link_libraries(optics_acq_sweep PRIVATE optics::optics)
+target_include_directories(optics_acq_sweep PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Benchmark")
+
 # HNSW recall-vs-speed probe (#47): HNSW vs exact / eps-approx nanoflann in high-D. Only
 # built with the optional HNSW backend enabled. Release config; not a ctest.
 if(OPTICS_ENABLE_HNSW)

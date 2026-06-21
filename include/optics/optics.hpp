@@ -443,6 +443,60 @@ double epsilon_estimation_knee( const std::vector<std::array<T, Dim>>& points, s
 }
 
 
+//=== Auto acquisition selection (issue #72) =================================
+
+namespace detail {
+
+// Average neighborhood size from a small strided sample -- the cheap density probe behind
+// NeighborMode::Auto / CoreDistMode::Auto and the Precompute memory guard.
+template <class Backend, class T, std::size_t Dim>
+double estimate_avg_neighbors( const Backend& backend, const std::vector<std::array<T, Dim>>& points,
+							   T eps, std::size_t sample_cap = 64 ) {
+	const std::size_t n = points.size();
+	const std::size_t sample = std::min<std::size_t>( n, sample_cap );
+	if ( sample == 0 ) { return 0.0; }
+	std::size_t neighbor_sum = 0;
+	std::vector<std::size_t> probe;
+	for ( std::size_t s = 0; s < sample; ++s ) {
+		probe.clear();
+		backend.radius_search( points[( n / sample ) * s], eps, probe );
+		neighbor_sum += probe.size();
+	}
+	return static_cast<double>( neighbor_sum ) / static_cast<double>( sample );
+}
+
+// Auto-acquisition thresholds, from the #72 crossover sweep (optics_acq_sweep, 4 threads): a cloud is
+// "low-dimensional dense" -- where OnDemand + Knn beat Precompute + Scan -- when the dimension is small
+// AND the average neighborhood is large. Below those, the parallel Precompute cache + Scan win; in high
+// dimension the search dominates (Precompute parallelism wins) and the extra k-NN query makes Knn lose.
+// Soft heuristics tuned for the multi-core default; see docs/algorithms.md.
+inline constexpr std::size_t kAutoLowDim = 8;            // Dim <= this counts as low-dimensional
+inline constexpr double kAutoDenseNeighbors = 1000.0;    // avg neighbors above this counts as dense
+inline constexpr std::size_t kAutoPrecomputeBudgetBytes = std::size_t( 1 ) << 30;  // 1 GiB cache budget
+
+// Resolve Auto acquisition knobs from the probed density (avg_nbrs) + dimension; pass-through for any
+// explicit choice. Pure (no I/O), so the policy is unit-testable. budget_bytes is the Precompute cache
+// budget; knn_available is whether the backend models KnnCoreDist.
+//   low-D dense  -> OnDemand + Knn  (avoid materialising / scanning huge neighborhoods)
+//   else         -> Precompute + Scan, but OnDemand if the estimated cache exceeds budget_bytes.
+inline std::pair<NeighborMode, CoreDistMode> resolve_auto_acquisition(
+		NeighborMode mode, CoreDistMode core_dist, std::size_t n, std::size_t dim, double avg_nbrs,
+		bool knn_available, std::size_t budget_bytes ) {
+	const bool low_dim_dense = ( dim <= kAutoLowDim ) && ( avg_nbrs > kAutoDenseNeighbors );
+	if ( mode == NeighborMode::Auto ) {
+		const double est_cache = static_cast<double>( n ) * static_cast<double>( sizeof( std::vector<std::size_t> ) )
+							   + static_cast<double>( n ) * avg_nbrs * static_cast<double>( sizeof( std::size_t ) );
+		mode = ( low_dim_dense || est_cache > static_cast<double>( budget_bytes ) ) ? NeighborMode::OnDemand : NeighborMode::Precompute;
+	}
+	if ( core_dist == CoreDistMode::Auto ) {
+		core_dist = ( knn_available && low_dim_dense ) ? CoreDistMode::Knn : CoreDistMode::Scan;
+	}
+	return { mode, core_dist };
+}
+
+}  // namespace detail
+
+
 //=== The OPTICS ordering ====================================================
 
 // Computes the OPTICS cluster-ordering and reachability distances.
@@ -454,7 +508,8 @@ double epsilon_estimation_knee( const std::vector<std::array<T, Dim>>& points, s
 //              faster (it avoids materializing/re-reading a huge neighbor cache).
 //              Precompute caches every neighborhood up front, in parallel: faster on
 //              sparse/low-density clouds, but uses O(n * avg_neighbors) memory (which
-//              can be tens of GB on dense data). Both yield identical results.
+//              can be tens of GB on dense data). Auto picks between them from a one-time
+//              density probe (#72). All three yield identical results.
 //   n_threads: worker threads for the Precompute query phase (0 => hardware
 //              concurrency). Ignored by OnDemand (the ordering loop is sequential).
 //   core_dist: Scan (default) or Knn core-distance computation. Knn is faster on
@@ -522,6 +577,18 @@ std::vector<reachability_dist> compute_reachability_dists(
 	_prof.add( _prof.index_build, _t_build );
 	const std::size_t n = points.size();
 
+	// Resolve Auto acquisition knobs (#72) from a one-time density probe. Both NeighborMode and
+	// CoreDistMode leave the ordering byte-identical, so this tunes only speed/memory, never the
+	// result. The probe runs only when an Auto knob is requested.
+	if ( mode == NeighborMode::Auto || core_dist_mode == CoreDistMode::Auto ) {
+		const double avg_nbrs = detail::estimate_avg_neighbors( backend, points, eps_t );
+		const std::size_t budget = ( max_precompute_bytes > 0 ) ? max_precompute_bytes : detail::kAutoPrecomputeBudgetBytes;
+		const auto resolved = detail::resolve_auto_acquisition( mode, core_dist_mode, n, Dim, avg_nbrs,
+																KnnCoreDist<Backend, T, Dim>, budget );
+		mode = resolved.first;
+		core_dist_mode = resolved.second;
+	}
+
 	// #55: a backend modeling RadiusSearchWithDists (double coordinates only, where its
 	// squared distances are bit-identical to detail::square_dist) lets us reuse the search's
 	// distances for the core-distance scan and the relaxation instead of recomputing them --
@@ -540,15 +607,7 @@ std::vector<reachability_dist> compute_reachability_dists(
 		// committing to it, so a dense cloud doesn't silently try to allocate tens of GB.
 		// The sampling cost is incurred only when a cap is set (default 0 == no check).
 		if ( max_precompute_bytes > 0 ) {
-			const std::size_t sample = std::min<std::size_t>( n, 64 );
-			std::size_t neighbor_sum = 0;
-			std::vector<std::size_t> probe;
-			for ( std::size_t s = 0; s < sample; ++s ) {
-				probe.clear();
-				backend.radius_search( points[( n / sample ) * s], eps_t, probe );
-				neighbor_sum += probe.size();
-			}
-			const double avg_neighbors = static_cast<double>( neighbor_sum ) / static_cast<double>( sample );
+			const double avg_neighbors = detail::estimate_avg_neighbors( backend, points, eps_t );
 			const double est_bytes = static_cast<double>( n ) * static_cast<double>( sizeof( std::vector<std::size_t> ) )
 								   + static_cast<double>( n ) * avg_neighbors * static_cast<double>( sizeof( std::size_t ) );
 			if ( est_bytes > static_cast<double>( max_precompute_bytes ) ) {
