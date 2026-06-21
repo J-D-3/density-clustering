@@ -96,7 +96,9 @@ def main(argv=None):
             r = RM.run_ours(exe, algo, csv_path, out, len(truth), args.min_pts, mcs,
                             "cosine" if mspace == "cosine" else "l2", "ondemand", "gaussian", 120.0)
         else:
-            r = RM.run_sklearn(engine, X, args.min_pts, mcs, eps=1.0, timeout=120.0)
+            out = os.path.splitext(csv_path)[0] + f"_{engine}.csv"
+            r = RM.run_sklearn(engine, csv_path, out, len(truth), args.k, args.min_pts, mcs,
+                               eps=1.0, timeout=120.0)
         ari, _, _ = RM.score(r["labels"], truth)
         ok = (r["status"] == "ok") and (ari >= thresh)
         failures += (0 if ok else 1)
