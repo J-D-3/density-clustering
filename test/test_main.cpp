@@ -1800,6 +1800,57 @@ TEST_CASE("hdbscan: separated blobs -> exact cluster count, agrees with ground t
 }
 
 
+TEST_CASE("hdbscan: KnnGraph MST agrees with exact DensePrim (#66 sub-quadratic MST)") {
+	// The near-exact k-NN-graph MST should recover the same partition as the exact dense-Prim MST.
+	// Three well-separated blobs: the long inter-cluster edges the k-NN graph omits are exactly the
+	// ones the connectivity fix-up supplies above all real edges, so the partition is preserved.
+	const std::vector<std::array<double, 2>> centers = { { 0, 0 }, { 100, 0 }, { 50, 100 } };
+	const std::size_t per = 40;
+	const auto pts = optics::testdata::gaussian_blobs<double, 2>( centers, per, 1.5 );
+	const std::size_t n = pts.size();
+
+	const auto exact = optics::hdbscan( pts, 5, 0, optics::ClusterSelectionMethod::EOM, false, 0, true,
+										{}, optics::MstAlgorithm::DensePrim );
+	const auto knn = optics::hdbscan( pts, 5, 0, optics::ClusterSelectionMethod::EOM, false, 0, true,
+									  {}, optics::MstAlgorithm::KnnGraph );
+
+	REQUIRE( knn.labels.size() == n );
+	CHECK( knn.n_clusters == exact.n_clusters );
+	// Same partition as the exact MST, and as the ground truth (gaussian_blobs lays out blob by blob).
+	CHECK( rand_index( to_ll( knn.labels ), to_ll( exact.labels ) ) > 0.99 );
+	std::vector<long long> truth( n );
+	for ( std::size_t i = 0; i < n; ++i ) { truth[i] = static_cast<long long>( i / per ); }
+	CHECK( rand_index( to_ll( knn.labels ), truth ) > 0.95 );
+
+	// Deterministic and valid probabilities.
+	const auto again = optics::hdbscan( pts, 5, 0, optics::ClusterSelectionMethod::EOM, false, 0, true,
+										{}, optics::MstAlgorithm::KnnGraph );
+	CHECK( ( knn.labels == again.labels ) );
+	for ( std::size_t i = 0; i < n; ++i ) {
+		CHECK( knn.probabilities[i] >= 0.0 );
+		CHECK( knn.probabilities[i] <= 1.0 );
+	}
+}
+
+
+TEST_CASE("hdbscan: KnnGraph MST path honours dedup and explicit weights (#66 x #46)") {
+	// Duplicate-heavy cloud: the KnnGraph path must thread through the same dedup/weighted plumbing as
+	// DensePrim and reach the same partition (weighted core distance + weighted sizes).
+	const auto base = optics::testdata::make_blobs<double, 3>( 4, 60, 30.0, 1.0, 808u );
+	std::vector<std::array<double, 3>> pts;
+	for ( const auto& p : base ) { pts.push_back( p ); pts.push_back( p ); }  // exact duplicates
+	const std::size_t n = pts.size();
+
+	const auto exact = optics::hdbscan( pts, 6, 0, optics::ClusterSelectionMethod::EOM, false, 0, true,
+										{}, optics::MstAlgorithm::DensePrim );
+	const auto knn = optics::hdbscan( pts, 6, 0, optics::ClusterSelectionMethod::EOM, false, 0, true,
+									  {}, optics::MstAlgorithm::KnnGraph );
+	REQUIRE( knn.labels.size() == n );
+	CHECK( knn.n_clusters == exact.n_clusters );
+	CHECK( rand_index( to_ll( knn.labels ), to_ll( exact.labels ) ) > 0.99 );
+}
+
+
 TEST_CASE("hdbscan: far-flung points are labelled noise") {
 	const std::vector<std::array<double, 2>> centers = { { 0, 0 }, { 100, 0 } };
 	auto pts = optics::testdata::gaussian_blobs<double, 2>( centers, 30, 1.0 );

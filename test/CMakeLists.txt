@@ -108,6 +108,12 @@ target_link_libraries(optics_soptics_proj_probe PRIVATE optics::optics)
 add_executable(optics_soptics_param_probe Benchmark/soptics_param_probe.cpp)
 target_link_libraries(optics_soptics_param_probe PRIVATE optics::optics)
 
+# HDBSCAN* MST-strategy probe (#66): exact dense-Prim vs near-exact k-NN-graph MST -- build time +
+# Rand agreement across n/dim. The acceptance evidence for the sub-quadratic MST. Release; not a ctest.
+add_executable(optics_hdbscan_mst_probe Benchmark/hdbscan_mst_probe.cpp)
+target_link_libraries(optics_hdbscan_mst_probe PRIVATE optics::optics)
+target_include_directories(optics_hdbscan_mst_probe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Benchmark")
+
 # HNSW recall-vs-speed probe (#47): HNSW vs exact / eps-approx nanoflann in high-D. Only
 # built with the optional HNSW backend enabled. Release config; not a ctest.
 if(OPTICS_ENABLE_HNSW)

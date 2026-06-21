@@ -68,6 +68,19 @@ namespace optics {
 //          partition (more, smaller clusters).
 enum class ClusterSelectionMethod { EOM, Leaf };
 
+// How the exact mutual-reachability MST is built (issue #66). Both feed the identical
+// MST-agnostic extraction tail; they differ only in how the spanning tree is produced.
+//   DensePrim : the textbook O(n^2) dense Prim over the COMPLETE graph -- exact, simple, the right
+//               tool up to n ~ 1e4 (the default; preserves the pinned hdbscan: results bit-for-bit).
+//   KnnGraph  : near-exact, sub-quadratic. Builds each point's exact k-NN graph (one query also
+//               yields the core distance), forms mutual-reachability edges over that sparse graph,
+//               and runs Kruskal with a connectivity fix-up -- the exact-Euclidean cousin of the
+//               CEOs graph sHDBSCAN uses. Core distances are exact; only the long inter-cluster
+//               edges can differ from the true MST (they fall at the top of the hierarchy, where
+//               well-separated clusters split anyway), so validate by ARI vs DensePrim. Requires a
+//               backend modeling KnnGraph (NanoflannBackend does); falls back to DensePrim otherwise.
+enum class MstAlgorithm { DensePrim, KnnGraph };
+
 // Result of a HDBSCAN* run. `labels` and `probabilities` are parallel to the input points.
 struct HdbscanResult {
 	std::vector<int> labels;            // per point: cluster id 0..n_clusters-1, or -1 for noise
@@ -259,26 +272,16 @@ inline std::vector<double> approx_core_distances( const std::vector<std::vector<
 // `neighbors`/`neighbor_sq` are the symmetric CEOs lists (each includes the point itself); because
 // the relation is symmetric every undirected edge is seen from its lower-index endpoint, so taking
 // only j > i lists each edge exactly once.
-inline std::vector<MstEdge> approx_mutual_reachability_mst(
-		const std::vector<std::vector<std::size_t>>& neighbors,
-		const std::vector<std::vector<double>>& neighbor_sq, const std::vector<double>& core,
-		std::size_t n ) {
+// Kruskal MST over a precomputed list of candidate mutual-reachability edges, with a connectivity
+// fix-up: any components the candidate graph leaves disconnected are joined to point 0's tree with a
+// weight strictly larger than every real edge, so those merges sit at the very top of the hierarchy
+// (exactly where well-separated clusters -- and tiny stray components that fall below
+// min_cluster_size and become noise -- ought to split). Shared by both sparse-graph MST builders:
+// the CEOs graph (sHDBSCAN, approximate neighbors) and the exact k-NN graph (issue #66). `edges` is
+// consumed (sorted in place); the caller owns building the edge list for its graph.
+inline std::vector<MstEdge> sparse_graph_mst( std::vector<MstEdge>& edges, std::size_t n ) {
 	std::vector<MstEdge> mst;
 	if ( n < 2 ) { return mst; }
-
-	// Gather candidate mutual-reachability edges (each undirected pair once, from the lower index).
-	std::vector<MstEdge> edges;
-	for ( std::size_t i = 0; i < n; ++i ) {
-		const auto& nb = neighbors[i];
-		const auto& sq = neighbor_sq[i];
-		for ( std::size_t t = 0; t < nb.size(); ++t ) {
-			const std::size_t j = nb[t];
-			if ( j <= i ) { continue; }  // skip self and the mirror copy on j's list
-			const double d = std::sqrt( sq[t] );
-			const double w = std::max( std::max( core[i], core[j] ), d );
-			edges.push_back( { i, j, w } );
-		}
-	}
 	std::sort( edges.begin(), edges.end(), []( const MstEdge& a, const MstEdge& b ) { return a.weight < b.weight; } );
 
 	// Kruskal with a plain union-find over the n points.
@@ -309,6 +312,95 @@ inline std::vector<MstEdge> approx_mutual_reachability_mst(
 		}
 	}
 	return mst;
+}
+
+inline std::vector<MstEdge> approx_mutual_reachability_mst(
+		const std::vector<std::vector<std::size_t>>& neighbors,
+		const std::vector<std::vector<double>>& neighbor_sq, const std::vector<double>& core,
+		std::size_t n ) {
+	if ( n < 2 ) { return {}; }
+	// Gather candidate mutual-reachability edges (each undirected pair once, from the lower index --
+	// the CEOs relation is symmetric, so every edge appears on its lower endpoint's list).
+	std::vector<MstEdge> edges;
+	for ( std::size_t i = 0; i < n; ++i ) {
+		const auto& nb = neighbors[i];
+		const auto& sq = neighbor_sq[i];
+		for ( std::size_t t = 0; t < nb.size(); ++t ) {
+			const std::size_t j = nb[t];
+			if ( j <= i ) { continue; }  // skip self and the mirror copy on j's list
+			const double d = std::sqrt( sq[t] );
+			const double w = std::max( std::max( core[i], core[j] ), d );
+			edges.push_back( { i, j, w } );
+		}
+	}
+	return sparse_graph_mst( edges, n );
+}
+
+
+//=== Steps 1+3, exact-but-sub-quadratic (issue #66): MST from an exact k-NN graph ===
+
+// Near-exact mutual-reachability MST built from each point's EXACT k-NN graph instead of the complete
+// graph (the DensePrim alternative) -- sub-quadratic, for the n > ~1e4 regime where O(n^2) Prim is
+// too slow. One k-NN query per point (parallel via the backend) yields both the exact core distance
+// (the min_samples-th neighbor) and that point's candidate MST edges, mirroring fast_hdbscan's
+// "initialise Boruvka from the kNN". Mutual-reachability edges are formed over the kNN graph and fed
+// to the shared sparse_graph_mst (Kruskal + connectivity fix-up). The k-NN graph is directed (i may
+// be in j's list without the reverse), so every candidate edge is listed in BOTH directions and the
+// union-find dedups -- no symmetrization pass needed.
+//
+// Exactness: core distances are EXACT (graph_k >= min_samples). The tree is exact whenever every true
+// MST edge joins points that are mutual k-NNs -- true within dense cluster cores; the few long
+// inter-cluster edges that are not captured are supplied by the connectivity fix-up above all real
+// edges, so the cluster *partition* is preserved even when the raw tree differs. Validate by ARI vs
+// DensePrim, not bit-identity. graph_k = 0 => an auto default (~2*min_samples, floor 10).
+//
+// `weights` (issue #46): non-empty makes the core distance weight-aware (cumulative neighbor weight
+// reaches min_samples), reusing approx_core_distances' weighted path. Requires KnnGraph<Backend>.
+template <class T, std::size_t Dim, class Backend = NanoflannBackend<T, Dim>>
+std::vector<MstEdge> knn_graph_mst( const std::vector<std::array<T, Dim>>& points, std::size_t min_samples,
+									unsigned n_threads, const std::vector<std::size_t>& weights = {},
+									std::size_t graph_k = 0 ) {
+	static_assert( KnnGraph<Backend, T, Dim>,
+		"knn_graph_mst requires a backend modeling KnnGraph (e.g. NanoflannBackend)" );
+	const std::size_t n = points.size();
+	if ( n < 2 ) { return {}; }
+
+	// A point's MST neighbour usually lies among its few nearest, but mutual reachability can pull it
+	// a little further, so query a touch beyond min_samples (capped at n). Larger graph_k -> closer to
+	// the true MST at higher query cost; the connectivity fix-up covers whatever the graph still misses.
+	const std::size_t k = ( graph_k > 0 )
+		? std::min<std::size_t>( n, graph_k )
+		: std::min<std::size_t>( n, std::max<std::size_t>( 2 * min_samples, 10 ) );
+
+	const Backend backend( points );
+	std::vector<std::vector<std::size_t>> neighbors( n );
+	std::vector<std::vector<double>> neighbor_sq( n );
+	detail::parallel_for( n_threads, n, [&]( std::size_t i ) {
+		backend.knn_graph( points[i], k, neighbors[i], neighbor_sq[i] );
+	} );
+
+	// Exact core distances from the k-NN squared distances (reuses the sHDBSCAN helper: the
+	// min_samples-th nearest, weight-aware when weights is non-empty).
+	const auto core = weights.empty()
+		? approx_core_distances( neighbor_sq, min_samples )
+		: approx_core_distances( neighbor_sq, min_samples, neighbors, weights );
+
+	// Mutual-reachability edges over the (directed) k-NN graph; list each direction and let Kruskal
+	// dedup. Skip only the self-edge (the point's own 0-distance entry).
+	std::vector<MstEdge> edges;
+	edges.reserve( n * k );
+	for ( std::size_t i = 0; i < n; ++i ) {
+		const auto& nb = neighbors[i];
+		const auto& sq = neighbor_sq[i];
+		for ( std::size_t t = 0; t < nb.size(); ++t ) {
+			const std::size_t j = nb[t];
+			if ( j == i ) { continue; }
+			const double d = std::sqrt( sq[t] );
+			const double w = std::max( std::max( core[i], core[j] ), d );
+			edges.push_back( { i, j, w } );
+		}
+	}
+	return sparse_graph_mst( edges, n );
 }
 
 
@@ -700,14 +792,22 @@ inline HdbscanResult extract_from_mst( const std::vector<MstEdge>& mst, std::siz
 //                           BYPASSES dedup; empty (default) leaves dedup in charge. Requires a backend
 //                           modeling KnnCoreDistWeighted.
 //
-// Complexity: the dense-Prim MST is O(n^2) time / O(n) memory -- exact and simple, suited to
-// small/medium n. A sub-quadratic MST (Boruvka, or the sOPTICS graph) is future work (issue #52
-// follow-up); the condensed-tree/extraction stages are already MST-agnostic and would be reused.
+//   mst_algo              : how the exact mutual-reachability MST is built (issue #66). DensePrim
+//                           (default) is the O(n^2) complete-graph Prim -- exact, best up to n ~ 1e4.
+//                           KnnGraph is the near-exact sub-quadratic k-NN-graph MST for larger n
+//                           (requires KnnGraph<Backend>; falls back to DensePrim otherwise). See
+//                           MstAlgorithm and docs/algorithms.md.
+//
+// Complexity: DensePrim is O(n^2) time / O(n) memory -- exact and simple, suited to small/medium n.
+// MstAlgorithm::KnnGraph gives a near-exact sub-quadratic MST for larger n; shdbscan() is the
+// approximate-neighbor (cosine) path. The condensed-tree/extraction stages are MST-agnostic and
+// shared across all three.
 template <class T, std::size_t Dim, class Backend = NanoflannBackend<T, Dim>>
 HdbscanResult hdbscan( const std::vector<std::array<T, Dim>>& points, std::size_t min_cluster_size,
 					   std::size_t min_samples = 0, ClusterSelectionMethod method = ClusterSelectionMethod::EOM,
 					   bool allow_single_cluster = false, unsigned n_threads = 0, bool dedup = true,
-					   const std::vector<std::size_t>& weights = {} ) {
+					   const std::vector<std::size_t>& weights = {},
+					   MstAlgorithm mst_algo = MstAlgorithm::DensePrim ) {
 	static_assert( std::is_floating_point_v<T>, "hdbscan: coordinate type 'T' must be float or double" );
 	static_assert( Dim >= 1, "hdbscan: dimension must be >= 1" );
 	static_assert( NeighborSearch<Backend, T, Dim>, "Backend does not satisfy the NeighborSearch concept" );
@@ -724,12 +824,27 @@ HdbscanResult hdbscan( const std::vector<std::array<T, Dim>>& points, std::size_
 	// Too few points to form even one cluster: everything is noise.
 	if ( n < min_cluster_size ) { return result; }
 
+	// Build the mutual-reachability MST for a (possibly weighted) cloud, dispatching on mst_algo. The
+	// KnnGraph branch is only instantiated for backends that model it (if constexpr), so a backend
+	// without knn_graph compiles fine and silently uses DensePrim. With DensePrim + empty weights this
+	// is byte-for-byte the original path, keeping the pinned hdbscan: cases unchanged.
+	const auto build_mst = [&]( const std::vector<std::array<T, Dim>>& pts, const std::vector<std::size_t>& w )
+			-> std::vector<detail::MstEdge> {
+		(void)mst_algo;  // unused when Backend lacks KnnGraph (the if constexpr below is discarded)
+		if constexpr ( KnnGraph<Backend, T, Dim> ) {
+			if ( mst_algo == MstAlgorithm::KnnGraph ) {
+				return detail::knn_graph_mst<T, Dim, Backend>( pts, min_samples, n_threads, w );
+			}
+		}
+		const auto core = detail::hdbscan_core_distances<T, Dim, Backend>( pts, min_samples, n_threads, w );
+		return detail::mutual_reachability_mst( pts, core );
+	};
+
 	// Explicit sample weights: weighted run on the points as given (labels parallel to the input).
 	if ( !weights.empty() ) {
 		if ( weights.size() != n ) { throw std::invalid_argument( "hdbscan: weights.size() must equal points.size()" ); }
 		if constexpr ( KnnCoreDistWeighted<Backend, T, Dim> ) {
-			const auto core = detail::hdbscan_core_distances<T, Dim, Backend>( points, min_samples, n_threads, weights );
-			const auto mst = detail::mutual_reachability_mst( points, core );
+			const auto mst = build_mst( points, weights );
 			return detail::extract_from_mst( mst, n, min_cluster_size, method, allow_single_cluster, weights );
 		} else {
 			throw std::invalid_argument( "hdbscan: explicit weights require a backend modeling KnnCoreDistWeighted" );
@@ -742,8 +857,7 @@ HdbscanResult hdbscan( const std::vector<std::array<T, Dim>>& points, std::size_
 			const auto d = deduplicate( points );
 			if ( d.unique_points.size() < n ) {  // actual collapse => weighted path
 				const std::size_t nu = d.unique_points.size();
-				const auto core = detail::hdbscan_core_distances<T, Dim, Backend>( d.unique_points, min_samples, n_threads, d.weights );
-				const auto mst = detail::mutual_reachability_mst( d.unique_points, core );
+				const auto mst = build_mst( d.unique_points, d.weights );
 				const auto ur = detail::extract_from_mst( mst, nu, min_cluster_size, method, allow_single_cluster, d.weights );
 				for ( std::size_t o = 0; o < n; ++o ) {
 					const std::size_t u = d.unique_of_original[o];
@@ -757,8 +871,7 @@ HdbscanResult hdbscan( const std::vector<std::array<T, Dim>>& points, std::size_
 		}
 	}
 
-	const auto core = detail::hdbscan_core_distances<T, Dim, Backend>( points, min_samples, n_threads );
-	const auto mst = detail::mutual_reachability_mst( points, core );
+	const auto mst = build_mst( points, {} );
 	return detail::extract_from_mst( mst, n, min_cluster_size, method, allow_single_cluster );
 }
 

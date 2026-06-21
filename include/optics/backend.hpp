@@ -80,6 +80,17 @@ concept KnnCoreDistWeighted = requires(const B b, const std::array<T, Dim>& p,
     b.knn_core_dist_weighted(p, w, k);
 };
 
+// Optional capability: a backend that returns a point's up-to-k nearest neighbors as parallel
+// (index, squared-distance) lists, ascending by distance and self-inclusive (the query point is its
+// own nearest at distance 0 when it is in the cloud). This is the building block for the exact
+// k-NN-graph mutual-reachability MST in HDBSCAN* (issue #66): one query yields both the core
+// distance (the min_samples-th entry) and the candidate graph edges. Detected with `if constexpr`.
+template <class B, class T, std::size_t Dim>
+concept KnnGraph = requires(const B b, const std::array<T, Dim>& p, std::size_t k,
+                            std::vector<std::size_t>& out_idx, std::vector<double>& out_sq) {
+    b.knn_graph(p, k, out_idx, out_sq);
+};
+
 namespace detail {
 
 // nanoflann dataset adaptor that reads the user's std::vector<std::array<T,Dim>>
@@ -205,6 +216,35 @@ public:
             if (acc >= min_pts) return std::sqrt(static_cast<double>(dist_sq[j]));
         }
         return std::nullopt;
+    }
+
+    // A point's up-to-k nearest neighbors as parallel (index, squared-distance) lists, ascending by
+    // distance and self-inclusive (the query point itself is the nearest, at distance 0). OVERWRITES
+    // out_idx/out_sq (unlike radius_search, which appends). Backs the exact k-NN-graph mutual-
+    // reachability MST (issue #66): the min_samples-th squared distance is the core distance, and the
+    // returned neighbors are that point's candidate MST edges. O(k log n) per query.
+    void knn_graph(const Point& p, std::size_t k, std::vector<std::size_t>& out_idx,
+                   std::vector<double>& out_sq) const {
+        const std::size_t kk = std::min<std::size_t>(k, adaptor_.kdtree_get_point_count());
+        out_idx.clear();
+        out_sq.clear();
+        if (kk == 0) return;
+        thread_local std::vector<std::size_t> idx;
+        thread_local std::vector<T> dist_sq;
+        idx.resize(kk);
+        dist_sq.resize(kk);
+        nanoflann::KNNResultSet<T, std::size_t> result_set(kk);
+        result_set.init(idx.data(), dist_sq.data());
+        nanoflann::SearchParameters params;
+        params.eps = search_eps;
+        index_.findNeighbors(result_set, p.data(), params);
+        const std::size_t found = result_set.size();
+        out_idx.reserve(found);
+        out_sq.reserve(found);
+        for (std::size_t j = 0; j < found; ++j) {
+            out_idx.push_back(idx[j]);
+            out_sq.push_back(static_cast<double>(dist_sq[j]));
+        }
     }
 
 private:
