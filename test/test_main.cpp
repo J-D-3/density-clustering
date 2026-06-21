@@ -1851,6 +1851,65 @@ TEST_CASE("hdbscan: KnnGraph MST path honours dedup and explicit weights (#66 x 
 }
 
 
+TEST_CASE("boruvka_mst: exact -- same total weight as dense Prim, n-1 edges (#66 Phase 2)") {
+	// The Boruvka MST is the SAME minimum spanning tree as dense Prim: any MST of a given weighted
+	// graph has the same total weight, so equal totals (to FP rounding) certify exactness. Checked
+	// across dimensions and on a noisy cloud (varied core distances).
+	const auto check = []( const auto& pts, std::size_t min_samples ) {
+		constexpr std::size_t Dim = std::tuple_size<std::decay_t<decltype( pts[0] )>>::value;
+		const std::size_t n = pts.size();
+		const auto core = optics::detail::hdbscan_core_distances<double, Dim,
+			optics::NanoflannBackend<double, Dim>>( pts, min_samples, 0 );
+
+		const auto dense = optics::detail::mutual_reachability_mst( pts, core );
+		const auto bor = optics::detail::exact_mutual_reachability_mst( pts, core );
+
+		REQUIRE( dense.size() == n - 1 );
+		REQUIRE( bor.size() == n - 1 );  // complete graph is connected => exactly n-1 edges, no fix-up
+		double sum_dense = 0.0, sum_bor = 0.0;
+		for ( const auto& e : dense ) { sum_dense += e.weight; }
+		for ( const auto& e : bor ) { sum_bor += e.weight; }
+		CHECK( sum_bor == doctest::Approx( sum_dense ).epsilon( 1e-9 ) );
+		// Every Boruvka edge is a real mutual-reachability weight (>= 0) between distinct points.
+		for ( const auto& e : bor ) { CHECK( e.u != e.v ); CHECK( e.weight >= 0.0 ); }
+	};
+	check( optics::testdata::make_blobs<double, 2>( 5, 80, 40.0, 1.0, 7u ), 5 );
+	check( optics::testdata::make_blobs<double, 3>( 4, 100, 30.0, 1.0, 31u ), 8 );
+	check( optics::testdata::make_blobs<double, 16>( 3, 60, 20.0, 1.0, 5u ), 6 );
+	{   // blobs + uniform noise: a wide spread of core distances exercises the mreach lower bound.
+		auto pts = optics::testdata::make_blobs<double, 2>( 3, 80, 40.0, 1.0, 9u );
+		const auto noise = optics::testdata::uniform_noise<double, 2>( 60, -80.0, 120.0, 4u );
+		pts.insert( pts.end(), noise.begin(), noise.end() );
+		check( pts, 5 );
+	}
+}
+
+
+TEST_CASE("hdbscan: Boruvka MST gives the same clustering as dense Prim (#66 Phase 2)") {
+	// End to end: the exact Boruvka MST yields the same partition as the exact dense-Prim path. The
+	// MST of a graph with equal-weight edges is not unique (mutual-reachability ties on shared
+	// core-distance plateaus), so the two can pick different equal-weight edges and shift the odd
+	// boundary point or permute cluster ids -- hence a permutation-invariant Rand index, not exact
+	// label equality. The total MST weight IS identical (the exactness certificate is the test above).
+	const auto run = []( const auto& pts, std::size_t mcs ) {
+		constexpr std::size_t Dim = std::tuple_size<std::decay_t<decltype( pts[0] )>>::value;
+		const auto dense = optics::hdbscan<double, Dim>( pts, mcs, 0, optics::ClusterSelectionMethod::EOM,
+														 false, 0, true, {}, optics::MstAlgorithm::DensePrim );
+		const auto bor = optics::hdbscan<double, Dim>( pts, mcs, 0, optics::ClusterSelectionMethod::EOM,
+													   false, 0, true, {}, optics::MstAlgorithm::Boruvka );
+		CHECK( bor.n_clusters == dense.n_clusters );
+		CHECK( rand_index( to_ll( bor.labels ), to_ll( dense.labels ) ) > 0.99 );
+		// Deterministic across runs.
+		const auto again = optics::hdbscan<double, Dim>( pts, mcs, 0, optics::ClusterSelectionMethod::EOM,
+														 false, 0, true, {}, optics::MstAlgorithm::Boruvka );
+		CHECK( ( bor.labels == again.labels ) );
+	};
+	run( optics::testdata::make_blobs<double, 2>( 4, 90, 40.0, 1.0, 123u ), 10 );
+	run( optics::testdata::make_blobs<double, 3>( 5, 120, 30.0, 1.0, 321u ), 15 );
+	run( optics::testdata::make_blobs<double, 16>( 3, 40, 20.0, 1.0, 5u ), 10 );
+}
+
+
 TEST_CASE("hdbscan: far-flung points are labelled noise") {
 	const std::vector<std::array<double, 2>> centers = { { 0, 0 }, { 100, 0 } };
 	auto pts = optics::testdata::gaussian_blobs<double, 2>( centers, 30, 1.0 );

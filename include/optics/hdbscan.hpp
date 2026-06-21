@@ -47,6 +47,7 @@
 #include "detail/thread_pool.hpp"
 #include "detail/random_features.hpp"   // Metric / SopticsProjection enums + kernel embedding (sHDBSCAN)
 #include "detail/random_projection.hpp" // CEOs approximate neighbor graph (sHDBSCAN)
+#include "detail/boruvka_mst.hpp"       // exact sub-quadratic Boruvka MST (issue #66, Phase 2)
 
 #include <algorithm>
 #include <array>
@@ -79,7 +80,12 @@ enum class ClusterSelectionMethod { EOM, Leaf };
 //               edges can differ from the true MST (they fall at the top of the hierarchy, where
 //               well-separated clusters split anyway), so validate by ARI vs DensePrim. Requires a
 //               backend modeling KnnGraph (NanoflannBackend does); falls back to DensePrim otherwise.
-enum class MstAlgorithm { DensePrim, KnnGraph };
+//   Boruvka   : EXACT and sub-quadratic -- the same minimum spanning tree as DensePrim (identical
+//               total weight), built by Boruvka's algorithm over a purpose-built component-aware
+//               KD-tree (see detail/boruvka_mst.hpp). This is the one to use when you need both
+//               exactness AND scale (n past the ~1e4 dense-Prim ceiling). Works with any KnnCoreDist
+//               backend (the tree is internal; the backend only supplies core distances).
+enum class MstAlgorithm { DensePrim, KnnGraph, Boruvka };
 
 // Result of a HDBSCAN* run. `labels` and `probabilities` are parallel to the input points.
 struct HdbscanResult {
@@ -792,16 +798,17 @@ inline HdbscanResult extract_from_mst( const std::vector<MstEdge>& mst, std::siz
 //                           BYPASSES dedup; empty (default) leaves dedup in charge. Requires a backend
 //                           modeling KnnCoreDistWeighted.
 //
-//   mst_algo              : how the exact mutual-reachability MST is built (issue #66). DensePrim
-//                           (default) is the O(n^2) complete-graph Prim -- exact, best up to n ~ 1e4.
-//                           KnnGraph is the near-exact sub-quadratic k-NN-graph MST for larger n
-//                           (requires KnnGraph<Backend>; falls back to DensePrim otherwise). See
-//                           MstAlgorithm and docs/algorithms.md.
+//   mst_algo              : how the mutual-reachability MST is built (issue #66). DensePrim (default)
+//                           is the O(n^2) complete-graph Prim -- exact, best up to n ~ 1e4. Boruvka
+//                           is EXACT and sub-quadratic (same tree as DensePrim) -- the one for exact
+//                           clustering past that ceiling. KnnGraph is a near-exact sub-quadratic
+//                           k-NN-graph MST (requires KnnGraph<Backend>; falls back to DensePrim
+//                           otherwise). See MstAlgorithm and docs/algorithms.md.
 //
 // Complexity: DensePrim is O(n^2) time / O(n) memory -- exact and simple, suited to small/medium n.
-// MstAlgorithm::KnnGraph gives a near-exact sub-quadratic MST for larger n; shdbscan() is the
-// approximate-neighbor (cosine) path. The condensed-tree/extraction stages are MST-agnostic and
-// shared across all three.
+// MstAlgorithm::Boruvka is exact and sub-quadratic; MstAlgorithm::KnnGraph is near-exact and
+// sub-quadratic; shdbscan() is the approximate-neighbor (cosine) path. The condensed-tree/extraction
+// stages are MST-agnostic and shared across all of them.
 template <class T, std::size_t Dim, class Backend = NanoflannBackend<T, Dim>>
 HdbscanResult hdbscan( const std::vector<std::array<T, Dim>>& points, std::size_t min_cluster_size,
 					   std::size_t min_samples = 0, ClusterSelectionMethod method = ClusterSelectionMethod::EOM,
@@ -837,6 +844,15 @@ HdbscanResult hdbscan( const std::vector<std::array<T, Dim>>& points, std::size_
 			}
 		}
 		const auto core = detail::hdbscan_core_distances<T, Dim, Backend>( pts, min_samples, n_threads, w );
+		if ( mst_algo == MstAlgorithm::Boruvka ) {
+			// Exact Boruvka over the component-aware KD-tree: same tree as dense Prim, sub-quadratic.
+			// Its BoruvkaEdge has the same (u, v, weight) layout as MstEdge; copy across.
+			const auto bedges = detail::exact_mutual_reachability_mst( pts, core );
+			std::vector<detail::MstEdge> mst;
+			mst.reserve( bedges.size() );
+			for ( const auto& e : bedges ) { mst.push_back( { e.u, e.v, e.weight } ); }
+			return mst;
+		}
 		return detail::mutual_reachability_mst( pts, core );
 	};
 

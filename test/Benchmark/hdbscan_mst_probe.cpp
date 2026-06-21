@@ -9,8 +9,13 @@
 // scaling sub-quadratically while dense-Prim grows ~O(n^2), and (b) the two producing the SAME
 // clustering (Rand index ~1.0) on well-separated data.
 //
+// Three MST strategies, same extraction tail:
+//   DensePrim : exact, O(n^2)            -- the baseline.
+//   KnnGraph  : near-exact, sub-quadratic.
+//   Boruvka   : EXACT, sub-quadratic     -- same tree as DensePrim (issue #66 Phase 2).
+//
 // Emits CSV to stdout:
-//   n,dim,min_cluster_size,denseprim_ms,knngraph_ms,speedup,rand_index
+//   n,dim,min_cluster_size,denseprim_ms,knngraph_ms,boruvka_ms,knn_speedup,bor_speedup,knn_rand,bor_rand
 //
 // Usage: optics_hdbscan_mst_probe [scale]   (scale multiplies per-blob counts; default 1).
 // Build in a Release config; not a ctest (timings vary by machine).
@@ -61,11 +66,18 @@ void run( std::size_t n_blobs, std::size_t per_blob, std::size_t mcs, unsigned n
 												   false, nt, true, {}, optics::MstAlgorithm::KnnGraph );
 	const long long knn_ms = static_cast<long long>( bench::ceil_ms_from_us( w2.elapsed<sw::mus>() ) );
 
-	const double ri = rand_index_sampled( dense.labels, knn.labels, 3000 );
-	const double speedup = knn_ms > 0 ? static_cast<double>( dense_ms ) / static_cast<double>( knn_ms ) : 0.0;
+	sw::Stopwatch w3;
+	const auto bor = optics::hdbscan<double, Dim>( pts, mcs, 0, optics::ClusterSelectionMethod::EOM,
+												   false, nt, true, {}, optics::MstAlgorithm::Boruvka );
+	const long long bor_ms = static_cast<long long>( bench::ceil_ms_from_us( w3.elapsed<sw::mus>() ) );
 
-	std::cout << n << "," << Dim << "," << mcs << "," << dense_ms << "," << knn_ms << ","
-			  << speedup << "," << ri << "\n";
+	const double knn_ri = rand_index_sampled( dense.labels, knn.labels, 3000 );
+	const double bor_ri = rand_index_sampled( dense.labels, bor.labels, 3000 );  // exact => ~1.0
+	const double knn_sp = knn_ms > 0 ? static_cast<double>( dense_ms ) / static_cast<double>( knn_ms ) : 0.0;
+	const double bor_sp = bor_ms > 0 ? static_cast<double>( dense_ms ) / static_cast<double>( bor_ms ) : 0.0;
+
+	std::cout << n << "," << Dim << "," << mcs << "," << dense_ms << "," << knn_ms << "," << bor_ms << ","
+			  << knn_sp << "," << bor_sp << "," << knn_ri << "," << bor_ri << "\n";
 	std::cout.flush();
 }
 
@@ -75,9 +87,10 @@ int main( int argc, char** argv ) {
 	std::size_t scale = 1;
 	if ( argc > 1 ) { scale = std::max<std::size_t>( 1, static_cast<std::size_t>( std::stoul( argv[1] ) ) ); }
 	const unsigned nt = bench::threads();
-	std::cerr << "HDBSCAN* MST: dense-Prim (exact O(n^2)) vs k-NN-graph (near-exact, sub-quadratic). "
-			  << "threads=" << nt << ", scale=" << scale << "; rand_index ~1.0 == same clustering.\n";
-	std::cout << "n,dim,min_cluster_size,denseprim_ms,knngraph_ms,speedup,rand_index\n";
+	std::cerr << "HDBSCAN* MST: dense-Prim (exact O(n^2)) vs k-NN-graph (near-exact) vs Boruvka (exact, "
+			  << "sub-quadratic). threads=" << nt << ", scale=" << scale << "; rand ~1.0 == same clustering "
+			  << "(bor_rand is ~1.0 by construction -- Boruvka is exact).\n";
+	std::cout << "n,dim,min_cluster_size,denseprim_ms,knngraph_ms,boruvka_ms,knn_speedup,bor_speedup,knn_rand,bor_rand\n";
 	// Growing n shows dense-Prim's O(n^2) overtaking the k-NN-graph build; raise scale to push further.
 	run<3>( 6, 300 * scale, 10, nt );
 	run<3>( 8, 800 * scale, 15, nt );
