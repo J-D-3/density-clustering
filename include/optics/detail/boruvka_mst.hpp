@@ -54,6 +54,27 @@
 
 namespace optics {
 namespace detail {
+#ifdef OPTICS_BORUVKA_PROFILE
+// Pruning-efficiency counters (single-thread profiling only): how many tree nodes the search touches
+// and how many point-point distances it evaluates. The ratio of dist-evals to n exposes whether the
+// KD-tree's box bound still prunes in high dimension.
+//
+// #76 INVESTIGATION (closed, negative): these counters confirmed the box bound's pruning collapses with
+// dimension -- ~3 nodes/query in 3-D vs ~82 in 16-D (a ~27x rise). BUT a prototype tightening the prune
+// with a per-node centroid+radius BALL bound (max(box, ball), exact -- identical MST weight) recovered
+// little: measured (optics_hdbscan_boruvka_ball_probe) only ~1.1-1.16x at 24-32 D and a REGRESSION
+// below 24-D (the O(Dim) ball-distance cost per node exceeds the pruning saved). That does not close the
+// ~2.8x gap to the near-exact KnnGraph backbone, which Auto already picks for dim >= 16 (Rand 1.0), so a
+// full ball/cover tree would not change the policy. The high-dim regime is better served by KnnGraph and
+// the HNSW-KnnGraph source (#73). The ball prototype was therefore reverted; this note records the result.
+inline std::size_t g_boruvka_nodes_visited = 0;
+inline std::size_t g_boruvka_dist_evals = 0;
+#endif
+}  // namespace detail
+}  // namespace optics
+
+namespace optics {
+namespace detail {
 
 // One undirected MST edge (u, v at mutual-reachability weight). A standalone type so this header does
 // not depend on hdbscan.hpp's MstEdge; the caller copies the fields across (identical layout).
@@ -235,6 +256,9 @@ void boruvka_search( const BoruvkaKdTree<T, Dim>& tree, int id,
 					 std::size_t q, std::size_t cq, const std::vector<std::size_t>& point_comp,
 					 double& best_w, std::size_t& best_u, std::size_t& best_v ) {
 	const auto& nd = tree.nodes()[static_cast<std::size_t>( id )];
+#ifdef OPTICS_BORUVKA_PROFILE
+	++g_boruvka_nodes_visited;
+#endif
 	if ( nd.comp == cq ) { return; }  // whole subtree is q's own component -- no valid target
 
 	// Lower bound on mutual reachability from q to ANY point under this node:
@@ -248,6 +272,9 @@ void boruvka_search( const BoruvkaKdTree<T, Dim>& tree, int id,
 		for ( std::size_t i = nd.start; i < nd.start + nd.count; ++i ) {
 			const std::size_t t = order[i];
 			if ( point_comp[t] == cq ) { continue; }  // same component (includes q itself)
+#ifdef OPTICS_BORUVKA_PROFILE
+			++g_boruvka_dist_evals;
+#endif
 			const double d = std::sqrt( square_dist( pts[q], pts[t] ) );
 			const double w = std::max( core[q], std::max( core[t], d ) );
 			if ( w < best_w ) { best_w = w; best_u = q; best_v = t; }
@@ -278,6 +305,9 @@ void boruvka_dual_search( const BoruvkaKdTree<T, Dim>& tree, int target_id, int 
 						  std::size_t cq, const std::vector<std::size_t>& point_comp,
 						  double& best_w, std::size_t& best_u, std::size_t& best_v ) {
 	const auto& tn = tree.nodes()[static_cast<std::size_t>( target_id )];
+#ifdef OPTICS_BORUVKA_PROFILE
+	++g_boruvka_nodes_visited;
+#endif
 	if ( tn.comp == cq ) { return; }  // whole target subtree is the query leaf's own component
 
 	const auto& qn = tree.nodes()[static_cast<std::size_t>( qleaf )];
@@ -294,6 +324,9 @@ void boruvka_dual_search( const BoruvkaKdTree<T, Dim>& tree, int target_id, int 
 			for ( std::size_t j = tn.start; j < tn.start + tn.count; ++j ) {
 				const std::size_t t = order[j];
 				if ( point_comp[t] == cq ) { continue; }  // same component (includes the leaf's own points)
+#ifdef OPTICS_BORUVKA_PROFILE
+				++g_boruvka_dist_evals;
+#endif
 				const double d = std::sqrt( square_dist( pts[q], pts[t] ) );
 				const double w = std::max( core[q], std::max( core[t], d ) );
 				if ( w < best_w ) { best_w = w; best_u = q; best_v = t; }
@@ -399,6 +432,8 @@ std::vector<BoruvkaEdge> exact_mutual_reachability_mst( const std::vector<std::a
 
 #ifdef OPTICS_BORUVKA_PROFILE
 		const std::size_t profile_comps = num_components;
+		g_boruvka_nodes_visited = 0;
+		g_boruvka_dist_evals = 0;
 		const auto profile_t0 = std::chrono::steady_clock::now();
 #endif
 		// Late rounds (few large components => mostly-pure query leaves) use the leaf-batched dual-tree;
@@ -453,7 +488,9 @@ std::vector<BoruvkaEdge> exact_mutual_reachability_mst( const std::vector<std::a
 		{
 			const auto profile_t1 = std::chrono::steady_clock::now();
 			const double ms = std::chrono::duration<double, std::milli>( profile_t1 - profile_t0 ).count();
-			std::fprintf( stderr, "[boruvka] round=%zu comps=%zu search_ms=%.3f\n", profile_round, profile_comps, ms );
+			const double evals_per_pt = n > 0 ? static_cast<double>( g_boruvka_dist_evals ) / static_cast<double>( n ) : 0.0;
+			std::fprintf( stderr, "[boruvka] round=%zu comps=%zu search_ms=%.3f dist_evals=%zu evals_per_pt=%.1f nodes=%zu\n",
+						  profile_round, profile_comps, ms, g_boruvka_dist_evals, evals_per_pt, g_boruvka_nodes_visited );
 			++profile_round;
 		}
 #endif
