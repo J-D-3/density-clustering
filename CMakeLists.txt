@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(density-clustering VERSION 0.9.2 LANGUAGES CXX)
+project(density-clustering VERSION 1.0.0 LANGUAGES CXX)
 
 # Optional Boost.Geometry rtree neighbor-search backend. OFF by default so the
 # library builds with no external dependencies (only the vendored nanoflann).

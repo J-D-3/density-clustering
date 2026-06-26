@@ -1,6 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite both the OPTICS algorithm and this implementation."
 title: "density-clustering"
+version: 1.0.0
 abstract: "A header-only C++20 implementation of the OPTICS density-based clustering algorithm (Ankerst et al., 1999)."
 type: software
 authors:

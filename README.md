@@ -203,7 +203,18 @@ Tuning knobs — and the matrix **confirms the defaults are the right ones** for
 - **[`examples/color_clustering/README.md`](examples/color_clustering/README.md)** — the color-space guide: image pipeline, output modes, color parameter tips, and gotchas.
 - **[`python/README.md`](python/README.md)** — the optional NumPy (pybind11) binding.
 - **[`tools/README.md`](tools/README.md)** — visualization, dataset generators, and comparison/validation scripts.
+- **[`docs/API-STABILITY.md`](docs/API-STABILITY.md)** — the frozen 1.0.0 public-API contract: what is stable, what is internal, and the semver rules.
 - **[`docs/ROADMAP-0.9.1.md`](docs/ROADMAP-0.9.1.md)** — the current milestone plan; **[`docs/ROADMAP-post-0.9.1.md`](docs/ROADMAP-post-0.9.1.md)** — the lookahead toward 1.0.0.
+
+## Stability & versioning
+
+From **1.0.0** the public `optics::` API is **frozen** and follows [Semantic Versioning](https://semver.org/):
+signatures, default arguments, struct layouts, and enum values in the stable surface won't break without a
+major-version bump. Everything in `optics::detail::`, the vendored `nanoflann`/`hnswlib`, and the
+test/benchmark helpers (`optics::testdata::`, `stopwatch::`) is **internal** and may change in any release.
+The approximate algorithms (`compute_soptics_reachability_dists`, `shdbscan`) keep a stable *signature* and
+`seed`-determinism, but their exact labels may improve across minor versions — depend on cluster quality,
+not specific label values. Full contract: **[`docs/API-STABILITY.md`](docs/API-STABILITY.md)**.
 
 ## Dependencies
 

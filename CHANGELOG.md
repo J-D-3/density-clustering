@@ -6,7 +6,23 @@ on [Keep a Changelog](https://keepachangelog.com/), and the project aims to foll
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-06-26
+
+First stable release. The public `optics::` API is now **frozen** under semantic versioning — see the
+new [`docs/API-STABILITY.md`](docs/API-STABILITY.md) for the contract (what is stable, what is internal,
+and how versions will move). This release also folds in the benchmark-matrix-chosen defaults (#59) and
+the deliberate pre-1.0 behaviour changes listed under *Changed*.
+
 ### Added
+- **API-stability policy + semver freeze** (#49): a new [`docs/API-STABILITY.md`](docs/API-STABILITY.md)
+  enumerates the frozen public surface (every symbol in `optics::` / `optics::io::` across `optics.hpp`,
+  `hdbscan.hpp`, `tree.hpp`, `preprocess.hpp`, `io.hpp`, `backend.hpp`, `version.hpp`, plus the optional
+  Boost/HNSW backends), and explicitly marks `optics::detail::`, the vendored `nanoflann`/`hnswlib`, and
+  the `optics::testdata::` / `stopwatch::` utility namespaces as **internal / not covered**. The
+  approximate algorithms (`compute_soptics_reachability_dists`, `shdbscan`) have a frozen *signature* and
+  `seed`-determinism but evolving results across minor versions (Tier 2). README gains a *Stability &
+  versioning* section linking the policy. Version bumped to **1.0.0** in `version.hpp`, `CMakeLists.txt`,
+  and `CITATION.cff`.
 - **Sub-quadratic HDBSCAN\* MST backbones** (#66): `optics::hdbscan(...)` gained a trailing
   `MstAlgorithm` argument selecting how the mutual-reachability MST is built, lifting the exact
   clusterer past the `~1e4` dense-Prim ceiling. **`Boruvka`** is EXACT and sub-quadratic — the same
